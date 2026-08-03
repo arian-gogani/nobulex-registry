@@ -1,0 +1,41 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.DS_Store
+node_modules/
+runs/
+*.log
+subjects/
+records/*.tmp
+
+# The preview build renders records that are held from publication, which
+# today means findings whose subjects have not yet been given their seven
+# days. Committing it would put them in a repository that may be pushed,
+# which is the thing the hold exists to prevent.
+#
+# It used to be written to brand/, and that was the same mistake one more
+# time. brand/ is the directory whose whole purpose is to be published, and
+# the preview was found sitting in it being served on every interface by a
+# throwaway http.server left running after an afternoon of looking at the
+# page. Every other layer had been fixed by then. Not tracking a file does
+# nothing about a file being read. It now goes to private/, which is not a
+# publish root and exists for exactly one reason: nothing in it should ever
+# leave this machine.
+brand/register.preview.html
+private/
+
+# That reasoning was right and was applied to the rendered page while the
+# records themselves stayed committed, in plain text, verdict field and all.
+# The gate held the derived artifact and left the source in the open, so the
+# first push would have published every finding the hold exists to withhold.
+#
+# Held records now live here and are not tracked. What is tracked instead is
+# records/held.manifest.json, which commits to each held record by sha256
+# without disclosing what it says. That is a stronger guarantee than keeping
+# them in git was: when a record publishes, anyone can hash it and see that it
+# matches the value committed on the day it was issued, which is what makes
+# "the verdict is fixed before the window opens" checkable rather than
+# promised. suite/hold.py maintains it and hooks/pre-push enforces it.
+records/held/

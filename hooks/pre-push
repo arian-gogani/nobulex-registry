@@ -1,0 +1,74 @@
+#!/bin/sh
+#
+# The push is the moment every hold either survives or does not.
+#
+# Everything upstream of here is a gate on a derived artifact. The renderer
+# refuses to write a page that names a held record or a held subject, and that
+# was worth building, but it protects one file. A push hands over the whole
+# repository, and the first time this one was ready to push, three commits
+# carried two held records in plain text with the verdict field intact. The
+# rendered page was clean the entire time. A reply window that ends because
+# someone typed a routine command was never a reply window.
+#
+# So the last thing between a held record and the public is this file, and it
+# is a refusal by default rather than a reminder.
+#
+# It can be bypassed with --no-verify, and that is deliberate. A hook that
+# cannot be overridden gets deleted the first time it is inconvenient. What
+# matters is that bypassing it is a decision someone makes on purpose, in a
+# sentence they typed, rather than a thing that happens to them.
+
+ROOT=$(git rev-parse --show-toplevel) || exit 1
+cd "$ROOT" || exit 1
+
+PY=python3
+command -v python3 >/dev/null 2>&1 || PY=python
+
+fail() {
+  echo ""
+  echo "PUSH REFUSED."
+  echo "$1"
+  echo ""
+  echo "  Nothing was pushed. If you have decided this is fine and you"
+  echo "  know precisely what becomes public, push again with --no-verify."
+  echo ""
+  exit 1
+}
+
+# 1. The held records must be exactly what the manifest committed to.
+#
+# A held record that no longer hashes to its committed value has been edited
+# during the window it was supposed to be frozen for, and the only reason
+# anyone would trust the manifest is that this cannot happen quietly.
+if ! $PY suite/hold.py --verify >/dev/null 2>&1; then
+  $PY suite/hold.py --verify
+  fail "  A held record does not match the hash committed for it, or a
+  held file is not committed to at all. Either way the manifest is
+  no longer a commitment, and publishing it as one would be a lie
+  about the only property that makes it worth anything."
+fi
+
+# 2. No held record may be reachable from any commit being handed over.
+#
+# This is the check that would have caught the leak. It walks history, so it
+# is the slow one, and it is the only one that matters on the first push.
+if ! $PY suite/hold.py --audit >/dev/null 2>&1; then
+  $PY suite/hold.py --audit
+  fail "  This repository still discloses a record it is withholding.
+  Pushing it publishes findings their subjects have not seen, which
+  ends the reply windows before they open and makes the right of
+  reply on the register a sentence rather than a rule."
+fi
+
+# 3. The register on disk must be what the records compile to.
+#
+# A stale page is not merely wrong. It is wrong in the direction of the last
+# state that was safe to publish, which is the kind of error nobody notices.
+if ! $PY suite/render_register.py --check >/dev/null 2>&1; then
+  $PY suite/render_register.py --check
+  fail "  brand/register.html is not what the records currently compile
+  to. Run: python3 suite/render_register.py"
+fi
+
+echo "pre-push: holds intact, history clean, register current."
+exit 0

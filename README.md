@@ -1,0 +1,272 @@
+# Nobulex
+
+**The independent reliability registry for agent tools.**
+
+Payment rails prove money moved. Nobulex proves what happened on the other side.
+
+Starting with financial data, where correctness is checkable against an authority.
+
+---
+
+## The failure this exists for
+
+An agent calls a tool. The tool returns a response that is well formed, plausible, and materially wrong.
+
+Empty where it should have been populated. Stale where it claims to be current. Scoped to a different entity than the one requested. Truncated with no signal that anything was cut. Filled from a fallback path that was never disclosed.
+
+Nothing raises. Nothing logs. The schema validates, because a well formed lie validates perfectly. The agent has no way to distinguish this from a correct answer, so it acts on it, and every downstream step inherits the error with full confidence.
+
+This registry has one subject: **silent semantic corruption**.
+
+The governing test is one question:
+
+> **Does it fail loud, or does it lie quiet?**
+
+A tool that raises an error is usable. You can retry it, route around it, surface it to a human. A tool that returns a confident wrong answer is not usable, and it is not currently measured by anything. Uptime does not measure it. Stars do not measure it. A green CI badge does not measure it. Schema validation does not measure it. Latency percentiles do not measure it.
+
+Every existing reliability signal in this ecosystem answers "did it respond." None of them answer "was the response true."
+
+## Why financial data first
+
+Not because it is the largest market. Because it is the only place where the ground truth is unambiguous, timestamped, and independently obtainable. A stock price at a given second either matches an authority or it does not. There is no rubric, no judgment call, and no argument about whether the verdict was fair.
+
+Categories where correctness is a matter of opinion come later, or never. A registry that starts somewhere contestable spends its first year defending verdicts instead of accumulating them.
+
+---
+
+## What gets graded
+
+Never a project. Never a company. Never a name on a repository.
+
+The subject of a Nobulex record is a **tuple**, and every field in it is load bearing:
+
+- **package** identity
+- **exact version or commit SHA**, never a floating tag or branch
+- **configuration** used during the run
+- **upstream data source** the tool was reading from
+- **execution environment**
+- **test suite** identifier and version
+- **observation time**
+
+Drop any one field and the record stops being reproducible, which means it stops being evidence. A grade attached to "acme-mcp" is a rumor. A grade attached to `acme-mcp @ 3f21b09, config X, upstream Y, env Z, suite v0.2, observed 2026-08-02T14:11Z` is a record.
+
+This is also the defamation boundary. Nobulex grades a commit under stated conditions. It does not characterize a company, a maintainer, or a product line.
+
+---
+
+## The five verdicts
+
+| Verdict | Meaning |
+|---|---|
+| `PASS` | Under this suite, in this window, the subject returned results correct within a tolerance pinned before execution, against a named ground truth source. |
+| `FAIL_SAFE` | The subject failed, and the failure was loud. Errors raised, degradation disclosed. Recoverable, and still a failure. |
+| `FAIL_UNSAFE` | The subject returned a well formed answer that was materially wrong, with no signal. This is the category. |
+| `INDETERMINATE` | The run could not establish either result. Harness fault, upstream outage, insufficient ground truth. Not a soft fail. |
+| `OUT_OF_SCOPE` | The suite does not cover this subject's behavior under these conditions. No claim is made in either direction. |
+
+Two rules that are not negotiable:
+
+**`FAIL_SAFE` is better than `FAIL_UNSAFE`, and it is not the same as `PASS`.** A tool that is down and says so has left you something to route around. It is still failing. Anyone who reads `FAIL_SAFE` as a pass has been told something false, and the presentation layer is responsible for preventing that reading.
+
+**`INDETERMINATE` is a real verdict, not an absence.** A registry that quietly drops the runs it could not resolve is publishing a survivorship curve, not evidence. Indeterminates get recorded, counted, and shown.
+
+---
+
+## Three attestation types, never merged
+
+- **TOOL** attestation covers one subject tuple called directly, with no model in the loop.
+- **COMPATIBILITY** attestation covers whether a specific client reads the tool's description and schema correctly, which is a different failure from the tool returning bad data.
+- **WORKFLOW** attestation covers a model, client, server, configuration, and task executing end to end.
+
+These answer different questions and carry different warranties. The reason they stay separate is not tidiness. It is that merging them lets a vendor dispute whose fault a failure was: the model misread the description, the client mangled the call, the server returned garbage. Three separate records make that argument unavailable.
+
+Averaging them into a single number is how a registry becomes a star rating, and a star rating is exactly the signal that already exists and already fails.
+
+---
+
+## What a verdict warrants, and what it does not
+
+A Nobulex record **does** say:
+
+- These specific inputs were sent to this exact subject tuple at this time.
+- These outputs came back.
+- They were compared against this named ground truth source.
+- Deviations were classified under this published taxonomy.
+- Anyone with the record can rerun the suite and get the same result.
+
+A Nobulex record **does not** say:
+
+- That the subject is safe, secure, or free of vulnerabilities.
+- That the subject is fit for your use case.
+- That the subject will behave the same way tomorrow, or on a different commit, or against a different upstream.
+- That the maintainer is trustworthy or untrustworthy.
+- Anything at all in a currency. Nobulex publishes no dollar-denominated trust figure, no coverage limit, and no score that looks like one.
+
+Nobulex is the **evidence provider, not the custodian.** It holds no funds, insures nothing, and settles nothing. Where a remedy is warranted, that is a licensed counterparty's product, and the record is the input to it.
+
+---
+
+## Records expire structurally
+
+A record carries a validity window. Queried outside that window it returns `EXPIRED`, regardless of what the verdict was.
+
+Not "last checked a while ago." Not a stale timestamp next to a green check. The schema cannot represent a pass that is out of date.
+
+**There will never be a portable badge image.** A PNG a maintainer can copy into a README is a claim that outlives its evidence, keeps rendering green after the verdict is withdrawn, and cannot be revoked. That mechanism is the specific way this category of business has failed before. Verification resolves against the register, live, or it does not resolve.
+
+---
+
+## Who pays
+
+**The buyer pays. Never the graded party for its own first verdict.**
+
+A maintainer cannot commission a verdict on its own package, cannot preview one before publication, and cannot negotiate one. The moment revenue depends on the subject's satisfaction, every verdict becomes a negotiation, and the registry's output is worth precisely nothing. This constraint costs real money early. It is what the entire thing is made of.
+
+One narrow exception exists, and it is bounded by three conditions that are all mandatory and all published on the record itself. A maintainer may fund a **re-test** of a subject already in the register, after a fix. When it does: the funding source is disclosed on the record, the methodology is the already-published suite and cannot be altered for the run, and the result publishes regardless of outcome. A vendor who pays for a re-test and fails gets a `FAIL_UNSAFE` record with their name on the invoice line.
+
+---
+
+## What is sold
+
+Two things, neither of which is the public register.
+
+**Buyer-pinned verification.** You name the server and the exact release you intend to deploy, plus the conditions you require: which upstreams, which configuration, which tolerance, which environment. Nobulex tests that tuple independently and returns a procurement-ready attestation. This is the first paid product, because it is the only one where somebody has already decided to spend money and needs a reason to sign.
+
+**Continuous verification.** A pass three months ago says nothing about today. Upstreams change shape, maintainers ship, adapters absorb drift silently. Continuous verification re-runs the pinned suite against the pinned subject on a schedule and alerts when the verdict changes. This is the recurring product, and it is the one that matters most, because it is the only version of this that keeps being true.
+
+The public register is the distribution surface for both. It is marketing. It is not the business, and confusing the two is how registries with beautiful dashboards run out of money.
+
+---
+
+## The loss cause taxonomy
+
+Every deviation is classified before it is recorded. The taxonomy is versioned from the first record it is applied to, because a classification scheme that changes silently makes its own history unreadable.
+
+`v0` covers:
+
+| Code | Failure |
+|---|---|
+| `silent_empty` | Returned an empty result where data existed, with no signal. |
+| `stale_value` | Returned cached or outdated data presented as current. |
+| `wrong_entity` | Returned data for a different entity than the one requested. |
+| `fabricated_field` | Returned a field populated with a value that has no upstream basis. |
+| `partial_truncation` | Returned a subset of the result with no truncation signal. |
+| `unsignaled_fallback` | Served from a fallback source without disclosing the substitution. |
+| `auth_degradation` | Silently downgraded to a lower privilege tier and returned reduced data as complete. |
+| `schema_drift` | Upstream shape changed and the adapter absorbed it into a wrong but valid response. |
+
+Each code is designed to be decidable from a run artifact without a human judgment call, which is what keeps the corpus consistent as it grows.
+
+The accumulated history of which subjects fail in which ways is the part of this that cannot be reconstructed later. Anyone can copy the taxonomy in an afternoon. Nobody can copy three years of observations they did not make.
+
+---
+
+## Status
+
+Written plainly, because a registry whose README overclaims has already failed its own test.
+
+**Designed and specified:** the verdict system, the subject tuple, the attestation types, the loss cause taxonomy v0, the warranty scope, the expiry model, the publication gate, and the public register surface.
+
+**Built:** a verification harness that speaks raw JSON-RPC to a subject over stdio and never imports the subject's own code, with probes for nonexistent entities, malformed input, closed-market dates, OHLC invariants, monotonic dates, silent truncation, cross-endpoint agreement, and freshness against an independent authority. A self-test that runs those probes against fixtures known to be bad, because a probe that cannot fail is worse than no probe at all. A record generator that writes the subject tuple from the environment the run actually happened in rather than from what the subject reports about itself, since a subject that self-reports its version can be wrong about it, and one of them was. A register page compiled from the records on every build, with a check mode that fails when the page and the records disagree. A publication gate that keeps a held record off the public page by construction, and refuses to write the page at all if a held record's identifier or its subject's name reaches it by any path. Held records themselves live outside version control, and what is committed in their place is a manifest that fixes each one by sha256 without disclosing a word of what it says, so a record can be unalterable and unreadable at the same time.
+
+**Run:** the suite has been run live against a pinned commit of a third party MCP server, twice, under two separately resolved dependency sets for the same source code. Each run produced a record. Both records are held under right of reply, and what they found is not stated here, for the same reason it is not stated on the register: a finding its subject has not yet seen is not one they can answer.
+
+**Not yet true:**
+
+- **Nothing is published.** Every record this registry has issued is held, the notices to their subject are written and unsent, and no reply window has opened. The register today carries its rules and a count of what is being withheld, and no subject at all. A registry that has issued verdicts and published none of them has not yet done the thing it exists to do.
+- **No verdict here is checkable by a stranger yet.** The method is, as of this repository: the harness, the probes, the self-test, the record generator, the renderer and the publication gate are all here to be read, run, and attacked. The records are not, because every one of them is held. Until the first one publishes, anything this project says about what it found is a claim about runs that exactly one machine has seen, and an uncheckable verdict is an opinion with a logo on it.
+- **There is no persistent issuing identity.** Records are not signed by a key with durable, publicly anchored provenance, and until they are, a signature proves only that the same ephemeral key signed twice.
+- **No buyer has paid for a verification.** Nobody has stated what they would pay, or at what point in their process they would want it.
+
+The first record this registry ever issued was withdrawn, because its subject tuple named a version that could not be resolved to anything real. The withdrawal was not deleted and will not be, because a registry that erases its mistakes is asking to be trusted instead of checked. It is not on the register today either, and the reason is worth stating: it is about the same package as the two records under reply, and it is the only subject the page would name at all, so publishing it tells a reader that findings are being withheld about one identified project while showing none of the evidence. That is the accusation the reply window exists to prevent, delivered without the detail its subject would need to answer it. It publishes on the day its successors do.
+
+Those four gaps are the actual state of this project. Everything above is the design they are being built toward.
+
+---
+
+## Run it
+
+Python 3.11 or newer. No dependencies for the self-test.
+
+```
+python3 suite/selftest.py
+```
+
+That is the first thing worth running and the first thing worth attacking. It runs every classifier in the harness against fixtures that are known to be bad and against fixtures that are known to be clean, and it fails if a classifier misses a planted failure or fires on clean input. A probe that cannot fail is worse than no probe at all, so the self-test is the part of this repository that decides whether any verdict it issues means anything. If you can construct a corrupted response that the suite calls clean, that is a bug in the registry and it is the most useful thing you could send.
+
+To run the suite against a live subject, clone the subject yourself, at a commit you pin, into an environment you resolved:
+
+```
+python3 suite/run.py --subject-dir <path-to-subject> --python <path-to-its-interpreter> --entry server.py
+```
+
+The harness speaks raw JSON-RPC over stdio and never imports the subject's code, because a harness that imports its subject is measuring a process it is also part of. The subject tuple in the resulting record is read from the environment the run actually happened in and not from what the subject says about itself.
+
+### Check that the published page has one author
+
+`brand/register.html` in this repository is the file that is served at `https://nobulex.com/register`. Not a copy of it, not a version of it. The same bytes.
+
+```
+shasum -a 256 brand/register.html
+curl -sS https://nobulex.com/register | shasum -a 256
+```
+
+Both should print `f4c5d764aaf3952322baaab403a9c59120e62071145f7f4ce6499ddfeec813e2`.
+
+This is worth two minutes because it is the one claim on this project that a stranger can settle right now, without waiting on a reply window and without taking anyone's word for anything. The register is compiled from the records by `suite/render_register.py`, which writes identical bytes to every publish target in one build, specifically so that no hand can reach the page between the records and the reader. A downstream copy step is a second author, and a second author of that page is a second chance to publish a name that is under embargo. If those two hashes ever disagree, something edited the published page after the generator produced it, and you should say so loudly.
+
+The hash will change whenever the register legitimately changes, which today means when a record publishes. The value above is the current one.
+
+### Rebuild the register
+
+```
+python3 suite/render_register.py
+```
+
+On a clone this overwrites `brand/register.html` with a page carrying no records at all, because the records are not in the clone: the published ones do not exist yet and the held ones are not in version control. That diff is the expected result, not a failure. Restore the committed copy with `git checkout brand/register.html` before comparing hashes again.
+
+The generator refuses at build time to write a page carrying a held record's identifier, a held subject's name, or a verdict token in the embargo block. Those refusals are in `suite/render_register.py` where the conditions can be read rather than taken on trust.
+
+---
+
+## The register
+
+The test suite is the product. The register is where its results are published.
+
+A record is a reproducible, independently checkable object with a subject tuple, a verdict, a loss cause classification, a validity window, and a suite reference. Anyone will be able to pull it, rerun it, and disagree with it in public. If a record cannot be independently reproduced by a stranger, it was never evidence, and it does not belong in the register.
+
+---
+
+## Right of reply
+
+Before any record with an adverse finding is published, the maintainer of the subject receives the full run artifact and has seven days to respond. The reply is published alongside the record, unedited. Adverse means `FAIL_UNSAFE`, `FAIL_SAFE`, or `INDETERMINATE`: any verdict that says in public that a named person's software did not do what it should.
+
+This used to say `FAIL_UNSAFE` only, and the narrower rule was wrong twice over. It was wrong on the merits, because a `FAIL_SAFE` record still tells the world that someone's project is broken, and severity is not what earns a subject the right to be heard; being publicly criticised by a stranger is. It was also wrong mechanically. The register says how many records it is holding, and if the only records ever held were `FAIL_UNSAFE`, then saying "one record is held" published the verdict without publishing the evidence. A finding a reader can infer but nobody can check is worse than one that is fully published, because there is nothing for the subject to answer.
+
+The register may say that a record is held and how many are held. It may not say what a held record found, not even its verdict, and it may not name who the record is about.
+
+The second half of that rule was learned the hard way, one layer down from the first. Stripping the verdicts was not enough. The page still named a subject elsewhere, and the page still said records were being held under right of reply, and right of reply now covers every adverse verdict, so those two published facts join into a third that was never written anywhere: a named project has an adverse finding against it that nobody can see. Whether a verdict token appears on the page is beside the point. The identity is part of the finding, so while any record is held, the register names no held subject at all. Today that means it publishes no subject whatsoever, which is the true state of a registry whose every record is waiting on someone else. The renderer refuses to write the page if a held subject's name reaches it, in the same way it already refuses on a held record's identifier.
+
+Each held record is committed to by sha256 in a manifest that is in version control while the record itself is not. When one publishes, anyone can hash it and check it against the value committed the day it was issued. That is what turns "the verdict was fixed before the window opened, and nothing was quietly softened while the subject was drafting a reply" from something the registry asserts into something a stranger can check. It is not a formal commitment scheme, since there is no nonce and it leans on the record's own entropy, and it is not a timestamp, since the commit date is worth exactly what the person who set it is worth. Both of those are gaps, and they are listed as gaps rather than papered over.
+
+The reply is **not adjudicative.** It cannot alter the verdict, and no part of it is negotiated. The verdict describes what the suite observed under pinned conditions, and the only thing that produces a different verdict is a different run: a new commit, or new conditions, pinned and executed again. The request, the delivery, and the reply window are all logged as part of the record.
+
+This exists because publishing a failure without giving the subject a voice is how a registry becomes a liability, not because the subject gets a vote.
+
+---
+
+## Why this repository's history begins at one commit
+
+The work happened in a private repository, and its earlier commits carry the held records in full, verdict field and all. Removing a file from the working tree does not remove it from the commits that already carry it, and the commits are what a clone hands over. Pushing that history would have published every held record at the moment the repository went public, which ends three reply windows before any of them opened. So the public repository starts from a fresh history containing the method and nothing else.
+
+That has a cost, and it should be stated rather than discovered. The point of `records/held.manifest.json` is that when a held record publishes, a stranger can hash it and check it against the commitment made on the day it was issued. A fresh history moves the public anchor to the day this repository was pushed, not the day the records were written. For the three records held today, the earlier commitment exists only in a private history, which is worth exactly what its author is worth, which is the same problem as the commit date and is listed alongside it. From this commit forward the anchor is public and the check is real. For what is already held, it is not, and no amount of explaining makes it so.
+
+The alternative was to rewrite the affected commits and push a laundered history, which is a worse answer from a project whose entire claim is that it says what it found.
+
+---
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+The suite is open source because a verdict derived from a suite nobody can read is not evidence. Anyone can run it against anything, including against the subjects this registry has graded, and reach a different answer in public. That is the intended use. What is not transferable is the record: a verdict is an entry in the register with a full subject tuple behind it, and running the suite yourself produces your result, not a Nobulex one.
