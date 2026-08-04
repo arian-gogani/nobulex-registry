@@ -40,6 +40,25 @@ def aggregate(outcomes):
             return o
     return OUT_OF_SCOPE
 
+# ---------------------------------------------------------------- record ids
+# Record ids run in one sequence, not one sequence per day: 001 was written on
+# one day, 002 and 003 on the next. This lives here, with the classifiers, and
+# takes a list rather than a directory, so that the arithmetic can be tested
+# without a filesystem. It is a correctness claim, and an untested correctness
+# claim is a preference.
+_ID = re.compile(r"^NBLX-\d{8}-(\d{3})\b")
+
+def next_in_sequence(names, day):
+    """One past the highest number in `names`, stamped with `day`.
+
+    Counts held and withdrawn records alongside published ones, because a
+    withdrawn record still spent its number, and reissuing it would point two
+    different records at one identity. An empty list yields 001.
+    """
+    seen = [0] + [int(m.group(1))
+                  for m in (_ID.match(n) for n in names) if m]
+    return f"NBLX-{day}-{max(seen) + 1:03d}"
+
 # ------------------------------------------------- pinned before execution
 CONFIG = {
     "price_tolerance_rel": 0.0005,

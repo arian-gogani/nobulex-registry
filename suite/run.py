@@ -22,6 +22,7 @@ from datetime import datetime, timezone, timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import (
     SUITE_VERSION, SCHEMA_VERSION, CONFIG, MCPStdio, aggregate, parse_bars,
+    next_in_sequence,
     a1_chart, a2_edgar, AuthorityUnavailable,
     PASS, FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, OUT_OF_SCOPE,
     classify_absent_entity, classify_empty_window, classify_invalid_argument,
@@ -120,6 +121,23 @@ def git(subject_dir, *args):
         return ""
 
 
+def next_record_id(out_dir, day):
+    """Every record id already under out_dir, handed to the pure sequencer.
+
+    A default computed from the date alone is wrong by construction, since the
+    sequence is global and the date is not, and a default that is a string
+    literal is wrong the second time it runs. This reads what is on disk
+    instead. Held and withdrawn records sit in a subdirectory, so it walks
+    rather than lists, and it reads no register but the one it was pointed at:
+    an empty directory yields 001, which is what a stranger's first run should
+    produce.
+    """
+    names = []
+    for _root, _dirs, files in os.walk(out_dir):
+        names.extend(files)
+    return next_in_sequence(names, day)
+
+
 class Run:
     def __init__(self):
         self.probes = []
@@ -160,7 +178,23 @@ def main():
     ap.add_argument("--entry", default="server.py")
     ap.add_argument("--python", default=sys.executable)
     ap.add_argument("--out", default="records")
-    ap.add_argument("--record-id", default=None)
+    ap.add_argument("--record-id", default=None,
+                    help="The id this record will be filed under. Defaults to "
+                         "one past the highest number already present under "
+                         "--out, counting held and withdrawn records, since a "
+                         "withdrawn record still spent its number. A run whose "
+                         "id is already taken is refused before it starts "
+                         "rather than allowed to overwrite the record on disk.")
+    ap.add_argument("--tool-history", default=None,
+                    help="The subject's tool that returns historical price "
+                         "bars, named exactly as it appears in tools/list. "
+                         "Required, and checked against the subject's own tool "
+                         "list before any probe runs. Run without it once and "
+                         "the harness prints what this subject exposes.")
+    ap.add_argument("--tool-info", default=None,
+                    help="The subject's tool that returns entity metadata for "
+                         "a ticker, named exactly as it appears in tools/list. "
+                         "Required, on the same grounds as --tool-history.")
     ap.add_argument("--install-path", default="unspecified",
                     help="How the subject's environment was built: "
                          "'declared-ranges' to install from the manifest's own "
@@ -168,6 +202,19 @@ def main():
                          "lockfile committed to the repository. A repository "
                          "can ship both. They are different configurations and "
                          "may earn different verdicts.")
+    ap.add_argument("--upstream", required=True,
+                    help="The data source the subject ultimately reads from, "
+                         "named by the operator. Required, and deliberately "
+                         "without a default. Every other field of the subject "
+                         "tuple is derived from the run: the package from the "
+                         "directory, the commit from git, the dependencies "
+                         "from the interpreter that was used. This one cannot "
+                         "be derived, because a server does not have to say "
+                         "where its data comes from and can be wrong when it "
+                         "does. A default here would be a value the record "
+                         "asserts and nobody observed, which is fabricated_"
+                         "field, which is a cause this suite grades other "
+                         "software for.")
     args = ap.parse_args()
 
     # The subject server is launched with cwd set to its own repository, so a
@@ -178,6 +225,23 @@ def main():
 
     started = datetime.now(timezone.utc)
     subject_dir = os.path.abspath(args.subject_dir)
+
+    # Settled before the first probe, not after the last one. An operator who
+    # has named a number that is already taken should learn that in the first
+    # second, not at the end of a live run they now have to repeat. The date
+    # comes from the start of the observation, so a run that crosses midnight
+    # is filed under the day it watched rather than the day it finished.
+    record_id = args.record_id or next_record_id(
+        args.out, started.strftime("%Y%m%d"))
+    out_path = os.path.join(os.path.abspath(args.out), f"{record_id}.json")
+    if os.path.exists(out_path):
+        print(f"refusing to run: {out_path} already exists.\n"
+              "A record id is an identity in a register, and other documents "
+              "cite it. Overwriting one would destroy evidence while leaving "
+              "every reference to it intact, which is the exact shape of "
+              "failure this suite exists to catch. Pass --record-id with an "
+              "unused id, or write to a different --out.", file=sys.stderr)
+        return 2
 
     commit = git(subject_dir, "rev-parse", "HEAD")
     commit_date = git(subject_dir, "show", "-s", "--format=%cI", "HEAD")
@@ -291,7 +355,38 @@ def main():
                  f"initialize and tools/list both answered, {len(tool_names)} "
                  "tools exposed", {"argv": cmd, "cwd": subject_dir}, None)
 
-        hist = "get_historical_stock_prices"
+        # Every probe below calls the subject by tool name, and a name the
+        # subject does not expose comes back as a protocol error. A protocol
+        # error is what several of these probes count as CORRECT behavior: a
+        # tool that refuses a nonexistent ticker through the error channel has
+        # passed P01 by design. So a run pointed at a subject without these
+        # tools would answer PASS on evidence consisting entirely of the tools
+        # not being there, and the record would carry a full subject tuple and
+        # look exactly like a real one. That is a verdict that fails quiet,
+        # produced by the suite whose only purpose is to catch verdicts that
+        # fail quiet. The names are operator supplied and checked against the
+        # subject's own tools/list before a single probe runs, so that every
+        # error a classifier later sees is the subject refusing a question it
+        # was actually asked.
+        named = {"--tool-history": args.tool_history,
+                 "--tool-info": args.tool_info}
+        bad = [f"{flag} {name!r} is not exposed" if name
+               else f"{flag} was not given" for flag, name in named.items()
+               if name not in tool_names]
+        if bad:
+            print("\nrefusing to probe: " + "; ".join(bad) + ".\n"
+                  "This suite calls the subject by tool name, and a name that "
+                  "is not there answers every probe with a protocol error, "
+                  "which several probes count as correct behavior. The run "
+                  "would return PASS on the strength of the tool being "
+                  "absent. Name the tools explicitly.\n"
+                  "This subject exposes: "
+                  + (", ".join(tool_names) or "(no tools at all)"),
+                  file=sys.stderr)
+            return 2
+
+        hist = args.tool_history
+        info = args.tool_info
 
         # P01 nonexistent entity ------------------------------------------
         def p01():
@@ -301,7 +396,7 @@ def main():
             o, c, d = classify_absent_entity(text, is_err, parsed)
             return o, c, d, text
         r.guard("P01", "nonexistent ticker", p01,
-                {"tool": "get_historical_stock_prices", "ticker": ABSENT_TICKER})
+                {"tool": hist, "ticker": ABSENT_TICKER})
 
         # P02 invalid interval --------------------------------------------
         def p02():
@@ -428,8 +523,7 @@ def main():
 
         # P09 entity identity ----------------------------------------------
         def p09():
-            text, is_err, _ = client.call("get_stock_info",
-                                          {"ticker": LIVE_TICKER})
+            text, is_err, _ = client.call(info, {"ticker": LIVE_TICKER})
             if a2 is None and auth_status.get("A2", {}).get("reachable"):
                 return (OUT_OF_SCOPE, None,
                         "ticker not present in the SEC registrant file", text)
@@ -439,7 +533,7 @@ def main():
             o, c, d = classify_entity(text, a2)
             return o, c, d, text
         r.guard("P09", "entity identity against authority A2", p09,
-                {"tool": "get_stock_info", "ticker": LIVE_TICKER})
+                {"tool": info, "ticker": LIVE_TICKER})
 
     except SubjectDidNotStart:
         pass
@@ -471,7 +565,7 @@ def main():
 
     rec = {
         "schema": SCHEMA_VERSION,
-        "record_id": args.record_id or f"NBLX-{ended.strftime('%Y%m%d')}-002",
+        "record_id": record_id,
         "attestation_type": attestation,
         "verdict": verdict,
         "loss_causes": causes,
@@ -488,7 +582,13 @@ def main():
                               "lockfiles_present": lockfiles(subject_dir),
                               "server_info": server_info,
                               "tools_exposed": tool_names},
-            "upstream": "Yahoo Finance, via the yfinance package",
+            # Operator-declared, and labelled that way in the record, because
+            # it is the one field of the tuple that no part of the run can
+            # observe. It is not read back from the subject, since a subject
+            # asserting its own upstream is the same class of evidence as a
+            # subject asserting its own version, and that has already been
+            # wrong once here.
+            "upstream": args.upstream,
             "execution_environment": {
                 "harness_python": platform.python_version(),
                 "subject_interpreter": args.python,
@@ -521,8 +621,8 @@ def main():
                     "configuration, or upstream.",
     }
 
-    os.makedirs(args.out, exist_ok=True)
-    path = os.path.join(args.out, f"{rec['record_id']}.json")
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    path = out_path
     with open(path, "w") as fh:
         json.dump(rec, fh, indent=2)
 

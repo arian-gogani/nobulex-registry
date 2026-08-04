@@ -36,20 +36,31 @@ is by definition adverse, so naming its subject would publish the accusation
 while withholding the evidence for it, which is the harm the window exists to
 prevent. The commitment is to the content, never to who it is about.
 
+These three commands run where the held records live. The public export is a
+different repository with a different job: it carries the manifest and must
+never carry the records, so every check above inverts there, and running the
+wrong one is loud in both directions. See --verify-export.
+
 Usage:  python3 suite/hold.py --commit   (write the manifest from the records)
         python3 suite/hold.py --verify   (fail if a held record was altered)
         python3 suite/hold.py --audit    (also search git for leaked content)
+        python3 suite/hold.py --verify-export
+                                         (for the public repo, where the
+                                          records must be absent, not intact)
 """
 import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RECORDS = os.path.join(ROOT, "records")
 HELD = os.path.join(ROOT, "records", "held")
 MANIFEST = os.path.join(ROOT, "records", "held.manifest.json")
+REGISTER = os.path.join(ROOT, "brand", "register.html")
 
 
 def sha256(path):
@@ -209,9 +220,8 @@ def cmd_verify(quiet=False):
     return 0
 
 
-def cmd_audit():
-    """Verify the hashes, then ask what this repository would hand a stranger."""
-    rc = cmd_verify()
+def held_ids_on_disk():
+    """The ids of the held records, read from the records themselves."""
     ids = set()
     for name in held_names():
         if name.endswith(".json"):
@@ -219,7 +229,37 @@ def cmd_audit():
                 rid = json.load(fh).get("record_id")
             if rid:
                 ids.add(rid)
+    return ids
 
+
+def held_ids_in_manifest():
+    """The same ids, read from the manifest instead of from the records.
+
+    The export has no records, so deriving the ids from disk there yields an
+    empty set, and every disclosure check downstream searches for nothing and
+    reports clean. A check that passes because it was handed nothing to look
+    for is the exact failure this project grades others for, so the export
+    reads its ids from the one file it does have. The manifest carries the ids
+    on purpose: an id with no verdict attached is not a disclosure, which is
+    why the register may state that a record is held and may not state what it
+    found.
+    """
+    if not os.path.exists(MANIFEST):
+        return set()
+    with io.open(MANIFEST, encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    return {r["record_id"] for r in manifest.get("held", [])
+            if r.get("record_id")}
+
+
+def disclosure_scan(ids):
+    """What this repository would hand a stranger, given the ids to look for.
+
+    Two questions, and the second is the one that has already been answered
+    wrong here once: does any tracked file name a held record, and is any held
+    record still reachable from a commit. Returns 0 or 2.
+    """
+    rc = 0
     tracked = git(["ls-files"])
     if tracked is not None:
         manifest_rel = os.path.relpath(MANIFEST, ROOT)
@@ -271,9 +311,144 @@ def cmd_audit():
     return rc
 
 
+def cmd_audit():
+    """Verify the hashes, then ask what this repository would hand a stranger."""
+    rc = cmd_verify()
+    return disclosure_scan(held_ids_on_disk()) or rc
+
+
+# ------------------------------------------------------------------- the export
+# The public repository is not this repository with fewer files in it. It has
+# the opposite obligation: here a held record must be present and unaltered,
+# and there it must be absent, so --verify passes on exactly the state that
+# would be a disclosure and fails on exactly the state that is correct. Run in
+# the export, all three checks the push hook makes fail, and they fail for a
+# structural reason rather than a fixable one: the records it verifies are
+# correctly missing, and the register it recompiles cannot be recompiled
+# without them.
+#
+# The consequence was that the hook was installed nowhere. It could only work
+# in the repository that has no remote and can never push, and it could never
+# work in the one that pushes to the public. Its own opening line is that a
+# push hands over the whole repository. It was sitting in the repository that
+# does not push.
+#
+# That is the same shape as every other defect this project has found in
+# itself: the guard was applied to the artifact it was written for, and to
+# nothing else that discloses. So the export gets checks written for the
+# export, and the mode is declared by the command rather than inferred from
+# the directory, because a guard that guesses which repository it is in will
+# eventually guess wrong and report clean.
+
+_HELD_COUNT = re.compile(r"(\d+)\s+issued and held\b")
+
+
+def register_held_count(text):
+    """The number of held records the register states, or None.
+
+    Pure, and separate from reading the file, so the parse can be exercised
+    without one.
+    """
+    m = _HELD_COUNT.search(text)
+    return int(m.group(1)) if m else None
+
+
+def cmd_verify_export():
+    """Refuse a push from the public repository if it carries what it holds."""
+    if not os.path.exists(MANIFEST):
+        sys.stderr.write(
+            "no %s. An export with no manifest commits to nothing, so the\n"
+            "  register's claim that records are held is unbacked.\n"
+            % os.path.relpath(MANIFEST, ROOT))
+        return 2
+
+    with io.open(MANIFEST, encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    committed = {r["file"] for r in manifest.get("held", [])}
+    rc = 0
+
+    # 1. Absence, which is the inversion. Anything the manifest commits to is
+    #    by definition adverse and unanswered, and here it is not evidence, it
+    #    is the leak.
+    present = sorted(n for n in held_names() if n in committed)
+    strays = sorted(n for n in os.listdir(RECORDS)
+                    if n.endswith(".json") and n != os.path.basename(MANIFEST)
+                    ) if os.path.isdir(RECORDS) else []
+    if present:
+        rc = 2
+        sys.stderr.write(
+            "A HELD RECORD IS ON DISK IN THE PUBLIC REPOSITORY:\n  %s\n"
+            "  In the working repository this state is correct and its\n"
+            "  absence is the fault. Here it is reversed. Every file the\n"
+            "  manifest commits to is a finding its subject has not answered\n"
+            "  yet, and the export exists to carry the commitment without\n"
+            "  carrying the finding.\n" % "\n  ".join(present))
+    if strays:
+        rc = 2
+        sys.stderr.write(
+            "RECORDS IN THE PUBLIC REPOSITORY THAT THE REGISTER DID NOT\n"
+            "PUBLISH THROUGH THE RENDERER:\n  %s\n"
+            "  A record reaches the public as a row on the register, which is\n"
+            "  compiled. A record file that arrived here some other way came\n"
+            "  by a path with no gate on it.\n" % "\n  ".join(strays))
+
+    # 2. The count on the page and the count in the manifest are two copies of
+    #    one fact, and they arrive here in two separate files. Copies drift,
+    #    and a register that understates what is held is wrong in the
+    #    direction nobody checks.
+    if os.path.exists(REGISTER):
+        with io.open(REGISTER, encoding="utf-8") as fh:
+            stated = register_held_count(fh.read())
+        want = sum(1 for r in manifest.get("held", [])
+                   if str(r.get("file", "")).endswith(".json"))
+        if stated is None:
+            rc = 2
+            sys.stderr.write(
+                "THE REGISTER DOES NOT STATE HOW MANY RECORDS ARE HELD.\n"
+                "  The one thing the disclosure rule permits this page to say\n"
+                "  about a held record is that it exists and how many there\n"
+                "  are. A page that has stopped saying it is either stale or\n"
+                "  was edited by hand.\n")
+        elif stated != want:
+            rc = 2
+            sys.stderr.write(
+                "THE REGISTER AND THE MANIFEST DISAGREE:\n"
+                "  the page states %d held, the manifest commits to %d.\n"
+                "  Both were written by the renderer in the working\n"
+                "  repository and copied here, so they disagreeing means one\n"
+                "  of them came from a different build. Re-export both\n"
+                "  together rather than correcting either one here; the copy\n"
+                "  is output, and the records are the source.\n"
+                % (stated, want))
+    else:
+        rc = 2
+        sys.stderr.write(
+            "NO %s.\n  The register is the product. Its absence is not a\n"
+            "  clean state.\n" % os.path.relpath(REGISTER, ROOT))
+
+    # 3. The scan that matters, with the ids taken from the manifest, since
+    #    there are no records here to take them from.
+    ids = held_ids_in_manifest()
+    if not ids:
+        rc = 2
+        sys.stderr.write(
+            "THE MANIFEST NAMES NO RECORD IDS.\n"
+            "  Then the history walk below has nothing to search for and will\n"
+            "  report clean whatever this repository contains.\n")
+    rc = disclosure_scan(ids) or rc
+
+    if rc == 0:
+        print("export clean: %d held file%s committed to, none present, "
+              "register agrees" % (len(committed),
+                                   "" if len(committed) == 1 else "s"))
+    return rc
+
+
 def main(argv):
     if "--commit" in argv:
         return cmd_commit()
+    if "--verify-export" in argv:
+        return cmd_verify_export()
     if "--audit" in argv:
         return cmd_audit()
     if "--verify" in argv:

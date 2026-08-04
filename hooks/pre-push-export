@@ -1,0 +1,66 @@
+#!/bin/sh
+#
+# The push hook for the public repository.
+#
+# There are two repositories and only one of them can push. The working one
+# holds the records and has no remote, so hooks/pre-push, which was written
+# for it, guards a repository that never hands anything to anybody. The public
+# one is where a push actually reaches strangers, and every check in that hook
+# fails there by construction: it verifies records that are correctly absent,
+# and it recompiles a register that cannot be recompiled without them.
+#
+# So the guard was installed in neither. It could not run where it was needed
+# and could not fire where it could run. That is the same defect this registry
+# keeps finding in itself, which is that a gate gets applied to the artifact it
+# was written for and to nothing else that discloses, and it is worth saying
+# plainly that it was found here by going to install the thing and discovering
+# it would refuse every push forever.
+#
+# This hook asks the questions that mean something in a repository whose job
+# is to carry a commitment without carrying what it commits to.
+#
+# It can be bypassed with --no-verify, deliberately, on the same reasoning as
+# the other one: a hook that cannot be overridden is deleted the first time it
+# is inconvenient, and what matters is that going around it is a sentence
+# somebody typed on purpose.
+
+ROOT=$(git rev-parse --show-toplevel) || exit 1
+cd "$ROOT" || exit 1
+
+PY=python3
+command -v python3 >/dev/null 2>&1 || PY=python
+
+if ! $PY suite/hold.py --verify-export >/dev/null 2>&1; then
+  $PY suite/hold.py --verify-export
+  echo ""
+  echo "PUSH REFUSED."
+  echo "  This repository is the public one. It may say that records are"
+  echo "  held and how many. It may not carry them, and it may not carry a"
+  echo "  count that disagrees with what it commits to. Pushing it as it"
+  echo "  stands either discloses a finding its subject has not answered or"
+  echo "  publishes a register that no longer matches the commitment beside"
+  echo "  it."
+  echo ""
+  echo "  Nothing was pushed. If you have decided this is fine and you know"
+  echo "  precisely what becomes public, push again with --no-verify."
+  echo ""
+  exit 1
+fi
+
+# The suite has to pass in the repository a stranger will clone, not only in
+# the one it was written in. A registry shipping a broken grader is the whole
+# of what it exists to catch, and the export is a copy, so it is the copy that
+# gets asked.
+if ! $PY suite/selftest.py >/dev/null 2>&1; then
+  $PY suite/selftest.py
+  echo ""
+  echo "PUSH REFUSED."
+  echo "  The suite does not pass in this repository. Whatever else is true,"
+  echo "  what would be published here is a grader that fails its own cases,"
+  echo "  and every verdict it has ever issued is cited against it."
+  echo ""
+  exit 1
+fi
+
+echo "pre-push: nothing held is present, the register agrees with the manifest, the suite passes."
+exit 0

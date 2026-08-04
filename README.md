@@ -197,10 +197,20 @@ That is the first thing worth running and the first thing worth attacking. It ru
 To run the suite against a live subject, clone the subject yourself, at a commit you pin, into an environment you resolved:
 
 ```
-python3 suite/run.py --subject-dir <path-to-subject> --python <path-to-its-interpreter> --entry server.py
+python3 suite/run.py --subject-dir <path-to-subject> --python <path-to-its-interpreter> --entry server.py \
+  --upstream "<the service the subject reads from>" \
+  --tool-history <tool that returns price bars> --tool-info <tool that returns entity metadata>
 ```
 
 The harness speaks raw JSON-RPC over stdio and never imports the subject's code, because a harness that imports its subject is measuring a process it is also part of. The subject tuple in the resulting record is read from the environment the run actually happened in and not from what the subject says about itself.
+
+`--upstream` is required and has no default, which is deliberate. Every other field of the tuple is read off the run: the package from the directory, the commit from git, the resolved dependencies from the interpreter you pointed at. That one cannot be, because a server does not have to say where its data comes from and can be wrong when it does. A default there would be a value the record asserts and nobody observed, which is `fabricated_field`, which is one of the eight causes this suite grades other software for. It was a hardcoded string here until it was caught, and it is named in this paragraph rather than quietly fixed because a registry that hides its own defects has no standing to publish anyone else's.
+
+`--tool-history` and `--tool-info` are required for a worse reason, and it is worth reading before running anything. The probes call the subject by tool name. A name the subject does not expose comes back as a protocol error, and a protocol error is what several of these probes count as *correct* behavior: a tool that refuses a nonexistent ticker through the error channel has passed P01 by design. So a run pointed at a subject that does not have these tools answered PASS on four probes, on evidence that consisted entirely of the tools not being there, and wrote a record with a full subject tuple that looked exactly like a real one. That is a verdict that fails quiet, produced by the suite whose only purpose is to catch verdicts that fail quiet.
+
+The names used to be hardcoded, so this could only happen to someone pointing the suite at their own server, which is the first thing this README tells a stranger to do. The names are now supplied by the operator and checked against the subject's own `tools/list` before a single probe runs, so every error a classifier sees afterward is the subject refusing a question it was actually asked. Run without the flags and the harness prints the tools the subject does expose, then exits without writing a record. The aggregate verdict in that scenario was `INDETERMINATE` rather than `PASS`, because the data-comparison probes had no bars to compare and `INDETERMINATE` dominates `PASS`, so the damage was bounded. Four probe-level PASSes on a subject that was never tested is still the wrong answer, and it is written down here rather than fixed quietly.
+
+The record is written to `--out`, numbered one past the highest number already there. Numbers are never reused, including by records that were withdrawn, and a run whose number is already taken is refused before the first probe rather than allowed to overwrite what is on disk. A record id is an identity that other documents cite, so overwriting one would destroy the evidence while leaving every reference to it resolving, which is the exact shape of failure this suite exists to catch.
 
 ### Check that the published page has one author
 
@@ -262,6 +272,28 @@ The work happened in a private repository, and its earlier commits carry the hel
 That has a cost, and it should be stated rather than discovered. The point of `records/held.manifest.json` is that when a held record publishes, a stranger can hash it and check it against the commitment made on the day it was issued. A fresh history moves the public anchor to the day this repository was pushed, not the day the records were written. For the three records held today, the earlier commitment exists only in a private history, which is worth exactly what its author is worth, which is the same problem as the commit date and is listed alongside it. From this commit forward the anchor is public and the check is real. For what is already held, it is not, and no amount of explaining makes it so.
 
 The alternative was to rewrite the affected commits and push a laundered history, which is a worse answer from a project whose entire claim is that it says what it found.
+
+---
+
+## The push is where a hold survives or does not
+
+Every other gate here protects a derived artifact. The renderer refuses to write a page naming a held record or a held subject, and that was worth building, and it protects one file. A push hands over the whole repository. The first time this one was ready to go public, three commits carried two held records in plain text with the verdict field intact, and the rendered page was clean the entire time.
+
+So there are two hooks in `hooks/`, and they are not the same hook, because the two repositories have opposite obligations. In the working repository a held record must be present and must hash to the value committed for it, and its absence is the fault. In the public repository the same file must be absent, and its presence is the leak. `hooks/pre-push` checks the first. `hooks/pre-push-export` checks the second: that nothing the manifest commits to is on disk, that no record arrived by a path the renderer did not compile, that the number of held records the register states matches the number the manifest backs, that no held record is reachable from any commit, and that the suite passes in the copy a stranger would clone rather than only in the one it was written in.
+
+That second hook exists because of a defect found while going to install the first one. The working repository has no remote, so its push hook guards a repository that can never hand anything to anybody. The public repository has the remote, and there every check in that hook fails by construction: it verifies records that are correctly missing, and it recompiles a register that cannot be recompiled without them. Installing it there would have refused every push forever, which is why it had been installed in neither place. The guard could not fire where it could run and could not run where it was needed. That is the same shape as the other defects listed here, which is a gate applied to the artifact it was written for and to nothing else that discloses, and it is written down for the same reason they are.
+
+The history walk in the export needed one further correction along the way. It takes the record identifiers it searches for from the held records, and the export has none, so it was searching for nothing and would have reported clean on any repository whatsoever. It now reads them from the manifest, which carries them on purpose: an identifier with no verdict attached is not a disclosure, and that is exactly why the register is permitted to say a record is held and not permitted to say what it found.
+
+Both hooks can be bypassed with `--no-verify`. That is deliberate. A guard that cannot be overridden gets deleted the first time it is inconvenient, and what matters is that going around it is a sentence somebody typed on purpose rather than something that happened to them.
+
+Git does not install hooks from a repository, so a clone gets an inert copy of both until somebody wires one up, and an inert guard reads exactly like a guard. In the public repository:
+
+```
+cp hooks/pre-push-export .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+```
+
+and in a working repository that holds records, `hooks/pre-push` instead. Running the wrong one is loud in either direction, because each refuses on precisely the state the other requires.
 
 ---
 

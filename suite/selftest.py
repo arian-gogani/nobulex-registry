@@ -27,7 +27,7 @@ sys.path.insert(0, __file__.rsplit("/", 1)[0])
 
 from harness import (
     PASS, FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, OUT_OF_SCOPE,
-    aggregate, parse_bars, CONFIG,
+    aggregate, parse_bars, CONFIG, next_in_sequence,
     classify_absent_entity, classify_empty_window, classify_invalid_argument,
     classify_window_span,
     classify_fidelity, classify_ohlc, classify_monotonic, classify_freshness,
@@ -529,6 +529,41 @@ _results.append((_ok, "quiet",
                  "a healthy authority is read exactly once",
                  f"result={_res} attempts={_n}", None,
                  "result={'ok': 1} attempts=1", None, ""))
+
+
+# ================================================ record id sequencing
+# The number on a record is its identity, and other documents cite it. Two
+# records wearing one number is the same defect this suite grades others for:
+# the citation still resolves, so nothing looks broken, and it points at the
+# wrong thing. These cases are cheap and the failure they prevent is not.
+
+def _seq(name, names, day, want, kind):
+    got = next_in_sequence(names, day)
+    _results.append((got == want, kind, name, got, None, want, None,
+                     f"from {names!r}"))
+
+_seq("an empty register starts at 001",
+     [], "19990103", "NBLX-19990103-001", "quiet")
+
+_seq("files that are not records consume no numbers",
+     ["held.manifest.json", "README.md", ".DS_Store", "notes-002.txt"],
+     "19990103", "NBLX-19990103-001", "quiet")
+
+_seq("the sequence is global and does not restart on a new day",
+     ["NBLX-19990101-001.json", "NBLX-19990102-002.json",
+      "NBLX-19990102-003.json"],
+     "19990103", "NBLX-19990103-004", "detect")
+
+_seq("a withdrawn record keeps its number and is not reissued",
+     ["NBLX-19990101-001.withdrawn.json"],
+     "19990103", "NBLX-19990103-002", "detect")
+
+_seq("the number is zero padded past single digits",
+     ["NBLX-19990101-009.json"], "19990103", "NBLX-19990103-010", "detect")
+
+_seq("gaps do not lower the next number",
+     ["NBLX-19990101-001.json", "NBLX-19990101-007.json"],
+     "19990103", "NBLX-19990103-008", "detect")
 
 
 # ============================================================ report
