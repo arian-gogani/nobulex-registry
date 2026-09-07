@@ -20,7 +20,7 @@ Exit code 0 only if every case passes. Anything else means no verdict this
 harness issues is worth publishing.
 """
 
-import json, sys
+import json, os, sys
 from datetime import datetime, timezone
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
@@ -567,6 +567,75 @@ _seq("gaps do not lower the next number",
 
 
 # ============================================================ report
+# ------------------------------------------------- the held-manifest guard
+# render_register refuses to build a page from a tree that cannot resolve the
+# held records its own manifest commits to. Held records are not in version
+# control, so every fresh checkout is such a tree, and the renderer used to
+# emit a page there saying nothing was being withheld while
+# records/held.manifest.json, two directories up and in version control,
+# committed to three. The count came from counting files, and files are what a
+# checkout does not have.
+#
+# Both halves are required here for the same reason as everywhere else. A guard
+# that refuses unconditionally protects the disclosure by blocking every build,
+# including the one that publishes the records and clears the hold.
+import tempfile as _tf
+import render_register as _rr
+
+
+def _manifest_tree(record_ids):
+    d = _tf.mkdtemp()
+    man = {"schema": _rr.MANIFEST_SCHEMA,
+           "held_count": len(record_ids),
+           "held": [{"file": "%s.json" % r, "sha256": "0" * 64,
+                     "record_id": r} for r in record_ids]}
+    with open(os.path.join(d, "held.manifest.json"), "w") as fh:
+        json.dump(man, fh)
+    return d
+
+
+def _guard(manifest_ids, resolvable_ids):
+    """Returns the (outcome, cause, detail) triple the selftest speaks."""
+    real = _rr.RECORDS
+    _rr.RECORDS = _manifest_tree(manifest_ids) if manifest_ids is not None else _tf.mkdtemp()
+    try:
+        everything = [("%s.json" % r, {"record_id": r}) for r in resolvable_ids]
+        guard = getattr(_rr, "assert_manifest_resolves", None)
+        if guard is None:
+            # Reported rather than raised. A missing guard is the defect these
+            # cases exist for, so it should read as a failing case in the
+            # output, not as a traceback that stops the file before the
+            # must-not-fire half runs.
+            return ("NO_GUARD", "guard_absent", "render_register has no "
+                    "assert_manifest_resolves")
+        guard(everything)
+        return ("RENDERED", None, "")
+    except SystemExit as e:
+        return ("REFUSED", "unresolved_held_record", str(e).split("\n")[0])
+    finally:
+        _rr.RECORDS = real
+
+
+_ALL = ["NBLX-1", "NBLX-2", "NBLX-3"]
+
+check("a checkout that cannot resolve any held record does not render",
+      _guard(_ALL, []), "REFUSED", "unresolved_held_record", "detect")
+
+check("one unresolved held record is enough to refuse",
+      _guard(_ALL, ["NBLX-1", "NBLX-2"]), "REFUSED", "unresolved_held_record",
+      "detect")
+
+check("the tree that holds the records still renders",
+      _guard(_ALL, _ALL), "RENDERED", None, "quiet")
+
+check("publishing a record is not blocked by the manifest still listing it",
+      _guard(_ALL, _ALL), "RENDERED", None, "quiet")
+
+check("a tree with no manifest at all is not refused",
+      _guard(None, []), "RENDERED", None, "quiet")
+
+
+
 def main():
     fails = [r for r in _results if not r[0]]
     det = sum(1 for r in _results if r[1] == "detect")

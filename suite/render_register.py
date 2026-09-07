@@ -598,9 +598,73 @@ def identifies(html, held):
     return sorted(out)
 
 
+def manifest_committed_record_ids():
+    """Record ids the held manifest commits to, by sha256.
+
+    The manifest is in version control; the held records themselves are not.
+    That is the point of it - a record can be unalterable and unreadable at the
+    same time - but it also makes the manifest the only thing a checkout is
+    guaranteed to have. Entries without a record_id are the reply documents,
+    which are held files but not records and are not counted here.
+    """
+    path = os.path.join(RECORDS, "held.manifest.json")
+    if not os.path.exists(path):
+        return set()
+    with io.open(path, encoding="utf-8") as fh:
+        man = json.load(fh)
+    if man.get("schema") != MANIFEST_SCHEMA:
+        return set()
+    return {e["record_id"] for e in man.get("held", []) if e.get("record_id")}
+
+
+def assert_manifest_resolves(everything):
+    """Refuse to build a page from a tree that cannot see its own held records.
+
+    Held records live outside version control, so `records/held` is empty in
+    every fresh checkout. The count on the page was compiled by counting those
+    files, which means a checkout without them rendered a page saying that
+    nothing is being withheld - while records/held.manifest.json, sitting in
+    version control two directories up, committed to three.
+
+    That is the second half of the rule this renderer exists to enforce, failing
+    on the side that is not owed: withholding the accusation and hiding that
+    anything is being withheld are different things, and this hid the second.
+
+    A renderer that cannot resolve the held records is not in a position to say
+    how many there are, and zero is the one answer it must not give. So it
+    refuses instead of guessing, and the manifest - not the presence of files -
+    is what it checks against. Once a record publishes it resolves out of
+    RECORDS and this check passes on it without the manifest needing an edit
+    first, so publication is never blocked by its own bookkeeping.
+    """
+    committed = manifest_committed_record_ids()
+    if not committed:
+        return
+    resolved = {r.get("record_id") for _, r in everything}
+    missing = sorted(committed - resolved)
+    if not missing:
+        return
+    raise SystemExit(
+        "REFUSING TO RENDER: held.manifest.json commits to %d record%s this "
+        "tree cannot resolve.\n"
+        "  missing: %s\n"
+        "\n"
+        "  This is expected in a fresh checkout: held records are not in\n"
+        "  version control. It is not a stale page. The committed copy of\n"
+        "  the register is the correct one and must not be overwritten to\n"
+        "  match this tree - rendering here would publish a page stating\n"
+        "  that nothing is being withheld, which is the disclosure this\n"
+        "  gate exists to protect.\n"
+        "\n"
+        "  Render from the environment that holds the records, or publish\n"
+        "  them.\n"
+        % (len(missing), "" if len(missing) == 1 else "s", ", ".join(missing)))
+
+
 def build(preview=False):
     """Compile the page. Public by default; preview shows what is held."""
     everything = load_all()
+    assert_manifest_resolves(everything)
 
     held = [(p, r) for p, r in everything if is_held(r)]
     held_ids = {r.get("record_id") for _, r in held}
