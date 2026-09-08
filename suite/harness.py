@@ -609,32 +609,91 @@ def _uniform_lag(sub, auth, tol):
             return lag
     return None
 
+def _numeric(v):
+    """True only for a real number. bool is excluded: True would compare as 1."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
 def classify_ohlc(bars):
-    """Probe: internal consistency. low <= open,close <= high."""
+    """Probe: internal consistency. low <= open,close <= high.
+
+    A null price is skipped and not called fabrication, which is right and is
+    pinned by the self-test: nulls are ordinary in real payloads. Everything
+    else this probe could not read was being skipped on the same path, and then
+    len(bars) was reported as the number checked. Three corrupted payloads
+    reached PASS through that: a payload that was a list of integers, prices
+    delivered as strings so that '10' <= '9' compared true and hid a Low above
+    its High, and one bar misspelling a key so that Low 40 against Close 5.5
+    was never seen. A fourth reached PASS by being null the whole way down,
+    where the skip rule is correct per bar and the conclusion is not, because
+    nothing was compared at all.
+
+    So a bar that is unreadable for any reason other than a null now resolves to
+    INDETERMINATE, which dominates PASS; a payload where nothing was comparable
+    is INDETERMINATE however it got that way; and the evidence string counts
+    what was compared rather than what arrived."""
     if not bars:
         return INDETERMINATE, None, "no bars"
     bad = []
+    checked = 0
+    nulled = 0
+    unreadable = 0
     for b in bars:
+        if not isinstance(b, dict):
+            unreadable += 1
+            continue
         try:
             o, h, l, c = b["Open"], b["High"], b["Low"], b["Close"]
         except Exception:
+            unreadable += 1
             continue
-        if None in (o, h, l, c):
+        quad = (o, h, l, c)
+        if any(v is None for v in quad):
+            nulled += 1
             continue
+        if not all(_numeric(v) for v in quad):
+            unreadable += 1
+            continue
+        checked += 1
         if not (l <= min(o, c) and h >= max(o, c) and l <= h):
             bad.append(str(b.get("Date"))[:10])
     if bad:
         return (FAIL_UNSAFE, "fabricated_field",
                 f"{len(bad)} bars violate low<=open,close<=high: {bad[:5]}")
-    return PASS, None, f"{len(bars)} bars internally consistent"
+    if unreadable:
+        return (INDETERMINATE, None,
+                f"{unreadable} of {len(bars)} bars carried no readable numeric "
+                f"OHLC quadruple, so internal consistency was not established "
+                f"for them; {checked} compared, {nulled} skipped as null")
+    if checked == 0:
+        return (INDETERMINATE, None,
+                f"no bar of {len(bars)} carried a comparable OHLC quadruple "
+                f"({nulled} skipped as null), so nothing was checked")
+    return (PASS, None,
+            f"{checked} bars internally consistent"
+            + (f", {nulled} skipped as null" if nulled else ""))
+
+ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 def classify_monotonic(bars):
+    """Probe: dates strictly increasing.
+
+    The ordering test is a string sort, which is chronological for ISO 8601 and
+    for nothing else. Two bars dated 01/05/2026 and 02/03/2025, in that order,
+    sorted as strings look increasing and are fourteen months backwards. So the
+    format is now checked before the order is, and a payload this probe cannot
+    order chronologically is INDETERMINATE rather than PASS."""
     if not bars:
         return INDETERMINATE, None, "no bars"
-    ds = [str(b.get("Date", ""))[:10] for b in bars]
+    ds = [str(b.get("Date", ""))[:10] for b in bars if isinstance(b, dict)]
     ds = [d for d in ds if d]
     if len(ds) < 2:
         return OUT_OF_SCOPE, None, "fewer than two dated bars"
+    unparseable = [d for d in ds if not ISO_DATE.match(d)]
+    if unparseable:
+        return (INDETERMINATE, None,
+                f"{len(unparseable)} of {len(ds)} dates are not ISO 8601 "
+                f"(first: {unparseable[0]!r}), so a lexical sort does not "
+                f"establish chronological order")
     if ds != sorted(ds) or len(set(ds)) != len(ds):
         return (FAIL_UNSAFE, "schema_drift",
                 "dates are not strictly increasing")
@@ -684,7 +743,26 @@ def classify_channel(noise, stderr_text):
                 "and a lenient one silently discards data it cannot frame.")
     return PASS, None, "no non-JSON emitted on the JSON-RPC channel"
 
+def _iso_dates(bars):
+    out = set()
+    for b in bars:
+        if not isinstance(b, dict):
+            continue
+        d = str(b.get("Date", ""))[:10]
+        if ISO_DATE.match(d):
+            out.add(d)
+    return out
+
 def classify_truncation(subject_bars, authority_bars):
+    """Probe: did the subject serve fewer sessions than the upstream holds?
+
+    This counted sessions and nothing else, so a subject returning five bars
+    from 1999 where the authority returned five from last week came back PASS
+    with the evidence 'subject 5 sessions, authority 5'. Equal counts are not
+    the same window. Where both sides carry ISO dates the windows are now
+    compared, and a subject serving sessions the authority never returned is
+    not a truncation result at all, so it resolves to INDETERMINATE and is left
+    to the fidelity probe rather than being called clean here."""
     if not subject_bars or not authority_bars:
         return INDETERMINATE, None, "one side returned nothing"
     s, a = len(subject_bars), len(authority_bars)
@@ -692,4 +770,10 @@ def classify_truncation(subject_bars, authority_bars):
         return (FAIL_UNSAFE, "partial_truncation",
                 f"subject returned {s} sessions where the same upstream read "
                 f"directly returned {a}, with no truncation signal")
+    sd, ad = _iso_dates(subject_bars), _iso_dates(authority_bars)
+    if sd and ad and not (sd & ad):
+        return (INDETERMINATE, None,
+                f"counts agree ({s} and {a}) but the windows do not overlap at "
+                f"all: subject {min(sd)}..{max(sd)}, authority {min(ad)}..{max(ad)}. "
+                f"Equal counts over different sessions is not a truncation result")
     return PASS, None, f"subject {s} sessions, authority {a}"

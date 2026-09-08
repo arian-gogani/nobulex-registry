@@ -413,6 +413,42 @@ check("truncation / equal counts pass",
       classify_truncation(CLEAN_BARS, CLEAN_AUTH),
       PASS, None, "quiet")
 
+# ============================ 10b. payloads that used to be called clean
+# Every case here returned PASS from the classifier named in it. They are
+# written down as cases rather than described, because a defect in a probe is
+# only fixed once something fails when it comes back.
+
+check("ohlc / a payload of integers is not a set of consistent bars",
+      classify_ohlc([1, 2, 3]),
+      INDETERMINATE, None, "quiet")
+
+check("ohlc / string prices where '10' <= '9' hides a Low above its High",
+      classify_ohlc([{"Date": "2026-09-01", "Open": "10", "High": "9",
+                      "Low": "10", "Close": "9"}]),
+      INDETERMINATE, None, "quiet")
+
+_missing_key = [dict(CLEAN_BARS[0]),
+                {"Date": "2026-09-02", "Opn": 5.0, "High": 6.0,
+                 "Low": 40.0, "Close": 5.5}]
+check("ohlc / a misspelled key does not make the bar consistent",
+      classify_ohlc(_missing_key),
+      INDETERMINATE, None, "quiet")
+
+check("ohlc / every price null means nothing was compared, not that all agreed",
+      classify_ohlc([{"Date": "2026-09-0%d" % i, "Open": None, "High": None,
+                      "Low": None, "Close": None} for i in range(1, 6)]),
+      INDETERMINATE, None, "quiet")
+
+check("monotonic / a lexical sort does not order non-ISO dates",
+      classify_monotonic([{"Date": "01/05/2026", "Close": 1},
+                          {"Date": "02/03/2025", "Close": 2}]),
+      INDETERMINATE, None, "quiet")
+
+check("truncation / equal counts over non-overlapping windows is not a pass",
+      classify_truncation([{"Date": "1999-01-0%d" % i} for i in range(1, 6)],
+                          [{"Date": "2026-09-0%d" % i} for i in range(1, 6)]),
+      INDETERMINATE, None, "quiet")
+
 # ======================================================== 11. aggregation
 _agg = [
     ([PASS, PASS, PASS], PASS),
