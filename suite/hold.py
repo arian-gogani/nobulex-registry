@@ -353,6 +353,33 @@ def register_held_count(text):
     return int(m.group(1)) if m else None
 
 
+def record_id_of(path):
+    """The record_id a file on disk claims, or None if it does not claim one."""
+    try:
+        with io.open(path, encoding="utf-8") as fh:
+            rid = json.load(fh).get("record_id")
+    except Exception:
+        return None
+    return rid if isinstance(rid, str) and rid else None
+
+
+def published_ids():
+    """Record ids the register actually carries.
+
+    The register is compiled from the records by the renderer, so an id on the
+    page is an id that went through the publication gate. An id that is not on
+    the page did not, whatever directory its file is sitting in.
+    """
+    if not os.path.exists(REGISTER):
+        return set()
+    try:
+        with io.open(REGISTER, encoding="utf-8") as fh:
+            page = fh.read()
+    except Exception:
+        return set()
+    return set(re.findall(r"NBLX-\d{8}-\d{3}", page))
+
+
 def cmd_verify_export():
     """Refuse a push from the public repository if it carries what it holds."""
     if not os.path.exists(MANIFEST):
@@ -370,10 +397,31 @@ def cmd_verify_export():
     # 1. Absence, which is the inversion. Anything the manifest commits to is
     #    by definition adverse and unanswered, and here it is not evidence, it
     #    is the leak.
-    present = sorted(n for n in held_names() if n in committed)
-    strays = sorted(n for n in os.listdir(RECORDS)
-                    if n.endswith(".json") and n != os.path.basename(MANIFEST)
-                    ) if os.path.isdir(RECORDS) else []
+    # Every file in the held directory, not only the ones the manifest names.
+    # This read `if n in committed`, which made it a filename allowlist run
+    # backwards: the same held record copied to a .bak, or renamed by a hand
+    # that was tidying, was reported as "none present" while sitting on disk.
+    # The manifest is the commitment. The directory is the leak surface, and
+    # in this repository it should be empty however a file got into it.
+    present = sorted(held_names())
+
+    # A .json in records/ is legitimate here exactly when the register
+    # published it. This used to flag every one of them without asking, so the
+    # first record this registry ever publishes would have refused every push
+    # after it, and the only way past the leak guard on the day the first
+    # finding went out would have been to switch it off. That is the same
+    # defect this file already documents about the other hook, arriving at the
+    # one moment the project exists for.
+    published = published_ids()
+    strays = []
+    if os.path.isdir(RECORDS):
+        for n in sorted(os.listdir(RECORDS)):
+            if not n.endswith(".json") or n == os.path.basename(MANIFEST):
+                continue
+            rid = record_id_of(os.path.join(RECORDS, n))
+            if rid and rid in published:
+                continue
+            strays.append(n)
     if present:
         rc = 2
         sys.stderr.write(

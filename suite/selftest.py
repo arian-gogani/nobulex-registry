@@ -506,6 +506,93 @@ gate("gate / a page naming nobody is not refused",
                     [("f", {"subject": {"package": "yfinance"}})]) == [],
      True, "quiet")
 
+# ======================= 10d. the export guard, on a throwaway repository
+#
+# The record ids below are deliberately fictional. The first draft of this
+# section used a real held id as a fixture value, and hold.py's own disclosure
+# scan refused the push: a tracked file naming a held record is an identifier
+# with no verdict attached, and it does not stop being one because it is in a
+# test. The guard caught its author, which is the only evidence that a guard
+# works that is worth anything.
+# The public repository's push hook is the last thing between a held record
+# and a stranger. These build a disposable export tree, point hold.py at it,
+# and assert the return code. The git-history half of the check is not
+# exercised here, because a temp directory is not a repository; checks 1 and 2
+# are, and both of the defects these were written for were in those.
+
+import os as _os, io as _io, json as _json, tempfile as _tmp, shutil as _sh
+import hold as _hold
+
+def _export_tree(records=(), held=(), page_ids=()):
+    root = _tmp.mkdtemp(prefix="nbx-export-")
+    _os.makedirs(_os.path.join(root, "records"))
+    _os.makedirs(_os.path.join(root, "brand"))
+    man = {"schema": "nobulex.held.manifest.v0", "held_count": 1,
+           "held": [{"file": "NBLX-00000000-000.json", "bytes": 1,
+                     "sha256": "0" * 64, "record_id": "NBLX-00000000-000",
+                     "publication_status": "HELD"}]}
+    with _io.open(_os.path.join(root, "records", "held.manifest.json"),
+                  "w", encoding="utf-8") as fh:
+        _json.dump(man, fh)
+    # The phrasing matters: hold.py parses the count out of the note line the
+    # renderer writes, so the fixture has to speak the renderer's sentence.
+    page = ("<html><body><p>%d records published, 1 issued and held, and 0 "
+            "withdrawn.</p>%s</body></html>"
+            % (len(page_ids), "".join("<p>%s</p>" % i for i in page_ids)))
+    with _io.open(_os.path.join(root, "brand", "register.html"),
+                  "w", encoding="utf-8") as fh:
+        fh.write(page)
+    for name, rid in records:
+        with _io.open(_os.path.join(root, "records", name), "w",
+                      encoding="utf-8") as fh:
+            _json.dump({"record_id": rid}, fh)
+    for name in held:
+        d = _os.path.join(root, "records", "held")
+        if not _os.path.isdir(d):
+            _os.makedirs(d)
+        with _io.open(_os.path.join(d, name), "w", encoding="utf-8") as fh:
+            fh.write('{"record_id": "NBLX-00000000-000"}')
+    return root
+
+def _export_rc(**kw):
+    root = _export_tree(**kw)
+    saved = (_hold.ROOT, _hold.RECORDS, _hold.HELD, _hold.MANIFEST,
+             _hold.REGISTER)
+    _hold.ROOT = root
+    _hold.RECORDS = _os.path.join(root, "records")
+    _hold.HELD = _os.path.join(root, "records", "held")
+    _hold.MANIFEST = _os.path.join(root, "records", "held.manifest.json")
+    _hold.REGISTER = _os.path.join(root, "brand", "register.html")
+    try:
+        import contextlib
+        with contextlib.redirect_stderr(_io.StringIO()):
+            with contextlib.redirect_stdout(_io.StringIO()):
+                return _hold.cmd_verify_export()
+    finally:
+        (_hold.ROOT, _hold.RECORDS, _hold.HELD, _hold.MANIFEST,
+         _hold.REGISTER) = saved
+        _sh.rmtree(root, ignore_errors=True)
+
+gate("export / an empty export carrying only the manifest is clean",
+     _export_rc(), 0, "quiet")
+
+gate("export / a record the register published is not a stray",
+     _export_rc(records=[("NBLX-20260910-004.json", "NBLX-20260910-004")],
+                page_ids=["NBLX-20260910-004"]),
+     0, "quiet")
+
+gate("export / a record file the register never published is refused",
+     _export_rc(records=[("NBLX-20260910-005.json", "NBLX-20260910-005")]),
+     2, "detect")
+
+gate("export / a held record under a name the manifest does not list is refused",
+     _export_rc(held=["NBLX-00000000-000.json.bak"]),
+     2, "detect")
+
+gate("export / a held record under its manifest name is refused",
+     _export_rc(held=["NBLX-00000000-000.json"]),
+     2, "detect")
+
 # ======================================================== 11. aggregation
 _agg = [
     ([PASS, PASS, PASS], PASS),
