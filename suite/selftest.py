@@ -449,6 +449,63 @@ check("truncation / equal counts over non-overlapping windows is not a pass",
                           [{"Date": "2026-09-0%d" % i} for i in range(1, 6)]),
       INDETERMINATE, None, "quiet")
 
+# ================================= 10c. the publication gate fails closed
+# These do not test a classifier. They test the two predicates that decide
+# whether a record reaches the public page, which is the only code in this
+# repository whose failure discloses an accusation rather than misgrading one.
+# They live here because this file is what the README tells a stranger to run.
+
+import render_register as _rr
+
+def gate(name, got, want, kind):
+    _results.append((got == want, kind, name, got, None, want, None, ""))
+
+gate("gate / a record with no publication block is held, not published",
+     _rr.is_held({"record_id": "X", "subject": {"package": "some-server"}}),
+     True, "detect")
+
+gate("gate / publication status 'held' in lower case is still held",
+     _rr.is_held({"record_id": "X", "publication": {"status": "held"}}),
+     True, "detect")
+
+gate("gate / a status that is not an explicit clearance is held",
+     _rr.is_held({"record_id": "X", "publication": {"status": "HELD_PENDING_REPLY"}}),
+     True, "detect")
+
+gate("gate / an explicit clearance publishes",
+     _rr.is_held({"record_id": "X", "publication": {"status": "CLEARED"}}),
+     False, "quiet")
+
+gate("gate / a four letter package name is visible to the guard",
+     "ccxt" in _rr.subject_strings({"subject": {"package": "ccxt"}}),
+     True, "detect")
+
+gate("gate / a claimed subject is guarded alongside the resolved one",
+     "claimed-name" in _rr.subject_strings(
+         {"subject": {"package": "resolved-name"},
+          "subject_as_claimed": {"package": "claimed-name"}}),
+     True, "detect")
+
+gate("gate / a page naming a short held subject is refused",
+     _rr.identifies("<p>1 record withheld.</p><p>ccxt</p>",
+                    [("f", {"subject": {"package": "ccxt"}})]) == ["ccxt"],
+     True, "detect")
+
+gate("gate / an escaped subject name is still found in the page",
+     _rr.identifies("<p>withheld</p><p>%s</p>" % _rr.esc("acme&co-mcp"),
+                    [("f", {"subject": {"package": "acme&co-mcp"}})]) == ["acme&co-mcp"],
+     True, "detect")
+
+gate("gate / a name inside a longer word is not a match",
+     _rr.identifies("<p>metadata about the ccxtras project</p>",
+                    [("f", {"subject": {"package": "ccxt"}})]) == [],
+     True, "quiet")
+
+gate("gate / a page naming nobody is not refused",
+     _rr.identifies("<p>0 records published, 1 held.</p>",
+                    [("f", {"subject": {"package": "yfinance"}})]) == [],
+     True, "quiet")
+
 # ======================================================== 11. aggregation
 _agg = [
     ([PASS, PASS, PASS], PASS),

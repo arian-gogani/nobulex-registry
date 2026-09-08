@@ -43,6 +43,7 @@ Usage:  python3 suite/render_register.py           (writes brand/register.html)
 import io
 import json
 import os
+import re
 import sys
 from datetime import datetime
 
@@ -60,6 +61,13 @@ RECORDS = os.path.join(ROOT, "records")
 # more sentence that can drift away from what is true.
 HELD_DIR = os.path.join(RECORDS, "held")
 MANIFEST_SCHEMA = "nobulex.held.manifest.v0"
+
+# The only publication statuses that permit a record onto the public page.
+# Everything else is held, including the absence of a status, because a gate
+# whose default is to publish is not a gate. Both spellings are accepted so
+# that the vocabulary can be settled without this list being the thing that
+# decides it.
+CLEARED_FOR_PUBLICATION = frozenset(("CLEARED", "PUBLISHED"))
 TEMPLATE = os.path.join(ROOT, "brand", "register.template.html")
 OUTPUT = os.path.join(ROOT, "brand", "register.html")
 
@@ -155,15 +163,31 @@ def subject_strings(rec):
     Package, origin and commit identify. The rest of the tuple, the
     environment and the suite and the pinned configuration, describes how the
     run was done and identifies nobody, so it is not collected here.
+
+    Two things were being dropped on the way out, and both dropped names rather
+    than noise. A length floor of seven characters meant this returned nothing
+    at all for ccxt, openbb, tiingo or mcp, so identifies() could not see the
+    name it was guarding and the page was free to print it beside the embargo
+    notice. And `subject or subject_as_claimed` read whichever came first, so a
+    record carrying both disclosed the claimed name unguarded, which is exactly
+    the shape of this registry's own withdrawn record: it exists because a
+    claimed subject named a version that resolved to nothing.
+
+    Every identifying string is collected now, at any length, from both
+    subjects. Short names are handled where the matching happens rather than by
+    refusing to look at them, because a guard that cannot see a name cannot
+    refuse to publish it.
     """
-    subj = rec.get("subject") or rec.get("subject_as_claimed") or {}
     out = set()
-    for key in ("package", "origin", "repository", "commit"):
-        val = subj.get(key)
-        if isinstance(val, str) and len(val) > 6:
-            out.add(val)
-            if key == "commit" and len(val) >= 10:
-                out.add(val[:10])
+    for subj in (rec.get("subject"), rec.get("subject_as_claimed")):
+        if not isinstance(subj, dict):
+            continue
+        for key in ("package", "origin", "repository", "commit"):
+            val = subj.get(key)
+            if isinstance(val, str) and val.strip():
+                out.add(val.strip())
+                if key == "commit" and len(val) >= 10:
+                    out.add(val[:10])
     return out
 
 
@@ -486,8 +510,24 @@ def is_held(rec):
     runs, the reply cannot change it when it arrives, and the reply publishes
     unedited beside the record. All the window buys the subject is the chance
     to be heard at the same time as everyone else, instead of afterwards.
+
+    This used to read `status == "HELD"`, which made the gate opt in. Every
+    other value published, including no publication block at all, including the
+    same word in lower case while the sibling is_withdrawn() upper-cased before
+    comparing. run.py writes no publication block, so a record straight out of
+    the harness satisfied none of the conditions for being held and all of the
+    conditions for being rendered. load_all() says in its own docstring that
+    moving a file by hand into the wrong folder cannot make it publishable,
+    which was true, while forgetting to hand-add a field to it could.
+
+    So the default is now what the paragraph above always claimed: held. A
+    record publishes when its publication block says the gate cleared, and in
+    no other circumstance, including every circumstance nobody thought of.
     """
-    return (rec.get("publication") or {}).get("status") == "HELD"
+    status = (rec.get("publication") or {}).get("status")
+    if not isinstance(status, str):
+        return True
+    return status.strip().upper() not in CLEARED_FOR_PUBLICATION
 
 
 def embargo_block(held):
@@ -571,6 +611,28 @@ def leaked(html, held_ids):
     return sorted(i for i in held_ids if i and i in html)
 
 
+def _names(html, needle):
+    """Does this page name `needle`, as the page actually spells it?
+
+    Two ways this missed. The page is written through esc(), so a subject
+    called acme&co-mcp reaches the html as acme&amp;co-mcp while a raw
+    substring search looks for acme&co-mcp and finds nothing. And a raw
+    substring search is the wrong instrument for short names in the other
+    direction too, since a three letter package matches inside unrelated words.
+
+    So the needle is compared in both its raw and its escaped spelling, and it
+    must sit on a word boundary. A false positive here refuses a page that was
+    clean, which costs a build. A false negative publishes the name of a
+    project this registry is withholding a finding about. Those are not
+    comparable, and this errs toward the first.
+    """
+    for form in {needle, esc(needle)}:
+        if re.search(r"(?<![0-9A-Za-z_-])%s(?![0-9A-Za-z_-])"
+                     % re.escape(form), html):
+            return True
+    return False
+
+
 def identifies(html, held):
     """Held subjects the page names anyway, which is the same leak one level up.
 
@@ -593,7 +655,7 @@ def identifies(html, held):
     out = set()
     for _, rec in held:
         for s in subject_strings(rec):
-            if s in html:
+            if _names(html, s):
                 out.add(s)
     return sorted(out)
 
