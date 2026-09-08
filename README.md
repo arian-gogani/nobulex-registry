@@ -6,6 +6,8 @@ Payment rails prove money moved. Nobulex proves what happened on the other side.
 
 Starting with financial data, where correctness is checkable against an authority.
 
+The argument underneath this, including what would make it wrong, is in [THESIS.md](THESIS.md).
+
 ---
 
 ## The failure this exists for
