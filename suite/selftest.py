@@ -934,6 +934,147 @@ gate("commitment / a manifest git cannot read is not read as agreement",
          None, {"a.json": {"sha256": "y", "bytes": 2}}) == [],
      True, "quiet")
 
+# ================ 10f. what the disclosure scan can actually see in history
+#
+# The scan behind the public repository's push hook read only
+# records/**.json, parsed each one, and matched a top-level record_id, while
+# printing "no held record is reachable from any commit". A reply notice is a
+# .md. A record committed somewhere other than records/ is not under
+# records/. A record pasted into a write-up is neither, and that last shape is
+# what put a docs/ folder on the public site. All three were a full
+# disclosure of a record whose subject had not answered it, and all three
+# walked past.
+
+_REPLY_FILE = "right-of-reply-000.md"
+
+def _leak_repo(files):
+    """A repository that committed `files` and then deleted them.
+
+    Deleting is the point. The working tree is clean afterwards and the
+    commits still carry every byte, which is what a clone hands over.
+    """
+    root = _tmp.mkdtemp(prefix="nbx-leak-")
+    _os.makedirs(_os.path.join(root, "records"))
+    man = {"schema": "nobulex.held.manifest.v0", "held_count": 2,
+           "held": [{"file": _FAKE_FILE, "bytes": 1, "sha256": "0" * 64,
+                     "record_id": _FAKE_ID, "publication_status": "HELD"},
+                    {"file": _REPLY_FILE, "bytes": 1, "sha256": "1" * 64}]}
+    with _io.open(_os.path.join(root, "records", "held.manifest.json"), "w",
+                  encoding="utf-8") as fh:
+        _json.dump(man, fh, indent=2)
+    _git(root, "init", "-q")
+    for path, content in files.items():
+        full = _os.path.join(root, path)
+        d = _os.path.dirname(full)
+        if d and not _os.path.isdir(d):
+            _os.makedirs(d)
+        with _io.open(full, "w", encoding="utf-8") as fh:
+            fh.write(content)
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "the commit that carries it")
+    for path in files:
+        _os.remove(_os.path.join(root, path))
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "gone from the working tree")
+    return root
+
+def _leaks(files):
+    """What history_leaks finds, as sorted keys. Contents never come back."""
+    root = _leak_repo(files)
+    saved = _point_hold_at(root)
+    try:
+        found = _hold.history_leaks({_FAKE_ID},
+                                    _hold.held_files_in_manifest())
+        return sorted(found or {})
+    except _sub.CalledProcessError as e:
+        return ["git fixture failed: %s" % e]
+    finally:
+        (_hold.ROOT, _hold.RECORDS, _hold.HELD, _hold.MANIFEST,
+         _hold.REGISTER) = saved
+        _sh.rmtree(root, ignore_errors=True)
+
+_RECORD_TEXT = _json.dumps({"record_id": _FAKE_ID, "verdict": "FAIL_UNSAFE",
+                            "summary": "the finding, in full"})
+_NOTICE_TEXT = "# Right of reply\n\nRecord %s concerns you.\n" % _FAKE_ID
+
+gate("history / the record itself is found in a commit that deleted it",
+     lambda: _leaks({"records/held/" + _FAKE_FILE: _RECORD_TEXT})
+     == [_FAKE_FILE],
+     True, "detect")
+
+gate("history / the reply notice is found although it carries no record id",
+     lambda: _leaks({"records/held/" + _REPLY_FILE: "no identifier in here"})
+     == [_REPLY_FILE],
+     True, "detect")
+
+gate("history / a record committed outside records/ is found",
+     lambda: _leaks({"docs/copy-of-a-record.json": _RECORD_TEXT})
+     == [_FAKE_ID],
+     True, "detect")
+
+gate("history / a record pasted into a write-up is found",
+     lambda: _leaks({"notes/audit.md": "we found:\n\n" + _RECORD_TEXT})
+     == [_FAKE_ID],
+     True, "detect")
+
+gate("history / the notice found by name and the record by content, together",
+     lambda: _leaks({"records/held/" + _REPLY_FILE: "no identifier",
+                     "notes/audit.md": _RECORD_TEXT})
+     == sorted([_REPLY_FILE, _FAKE_ID]),
+     True, "detect")
+
+gate("history / a repository carrying neither stays quiet",
+     lambda: _leaks({"README.md": "nothing held is named here"}) == [],
+     True, "quiet")
+
+# The manifest is the one file where a held id belongs, labelled as a
+# holding. If it counted as a leak the scan would refuse every push forever.
+gate("history / the manifest naming the ids it commits to is not a leak",
+     lambda: _leaks({"README.md": "clean"}) == [],
+     True, "quiet")
+
+# A commit message is published with its commit, and the scan read tracked
+# files and history blobs and nothing else. "record: hold <id>" is the natural
+# way to write the commit that issues a record.
+def _message_leaks(message):
+    root = _tmp.mkdtemp(prefix="nbx-msg-")
+    try:
+        _os.makedirs(_os.path.join(root, "records"))
+        with _io.open(_os.path.join(root, "records", "held.manifest.json"),
+                      "w", encoding="utf-8") as fh:
+            _json.dump({"schema": "nobulex.held.manifest.v0", "held": []}, fh)
+        _git(root, "init", "-q")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-q", "-m", message)
+        saved = _point_hold_at(root)
+        try:
+            return sorted(_hold.message_leaks({_FAKE_ID}) or {})
+        finally:
+            (_hold.ROOT, _hold.RECORDS, _hold.HELD, _hold.MANIFEST,
+             _hold.REGISTER) = saved
+    except _sub.CalledProcessError as e:
+        return ["git fixture failed: %s" % e]
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+
+gate("message / a commit message naming a held record is found",
+     lambda: _message_leaks("record: hold %s pending reply" % _FAKE_ID)
+     == [_FAKE_ID],
+     True, "detect")
+
+gate("message / the id in a message body, not the subject line, is found",
+     lambda: _message_leaks("record: hold one\n\nThe record is %s.\n"
+                            % _FAKE_ID) == [_FAKE_ID],
+     True, "detect")
+
+gate("message / a message naming no record stays quiet",
+     lambda: _message_leaks("suite: widen the disclosure scan") == [],
+     True, "quiet")
+
+gate("message / nothing held means nothing to look for",
+     lambda: _hold.message_leaks(set()) == {},
+     True, "quiet")
+
 # ================= 10e. the subject tuple names the subject, not the folder
 # run.py used os.path.basename(subject_dir) as the package name. That is the
 # operator's choice of clone path, so the same commit cloned into ~/tmp

@@ -117,36 +117,81 @@ def git(args):
         return None
 
 
-def history_leaks(ids):
-    """Held records whose content is reachable from a commit in this repo.
+def blobs_in_history():
+    """Every blob reachable from any ref, as {object id: one path it had}.
 
-    Moving the records out of git protects the next push and does nothing at
-    all about the commits that already carry them, and those commits are
-    exactly what a clone hands over. So history is read rather than assumed
-    clean. This parses candidate blobs and matches on record id; it never
-    prints, returns, or stores anything it found inside one.
+    Deduped by object id, so a file that never changed is read once instead of
+    once per commit, and `rev-list --all` rather than HEAD, because a branch
+    nobody has merged is still a branch somebody can push.
     """
     revs = git(["rev-list", "--all"])
     if revs is None:
         return None
-    manifest_name = os.path.basename(MANIFEST)
-    hits = {}
+    seen = {}
     for rev in revs.split():
-        listing = git(["ls-tree", "-r", "--name-only", rev]) or ""
-        for path in listing.splitlines():
-            if not path.startswith("records/") or not path.endswith(".json"):
+        listing = git(["ls-tree", "-r", rev]) or ""
+        for line in listing.splitlines():
+            meta, _, path = line.partition("\t")
+            bits = meta.split()
+            if len(bits) < 3 or bits[1] != "blob":
                 continue
-            if os.path.basename(path) == manifest_name:
-                continue
-            blob = git(["cat-file", "-p", "%s:%s" % (rev, path)])
-            if not blob:
-                continue
-            try:
-                rec = json.loads(blob)
-            except ValueError:
-                continue
-            if rec.get("record_id") in ids:
-                hits.setdefault(rec["record_id"], set()).add(path)
+            seen.setdefault(bits[2], path)
+    return seen
+
+
+def history_leaks(ids, held_files=()):
+    """Held content reachable from a commit in this repo.
+
+    Moving the records out of git protects the next push and does nothing at
+    all about the commits that already carry them, and those commits are
+    exactly what a clone hands over.
+
+    This used to read only `records/**.json`, parse each one, and match a
+    top-level record_id. Three things walked past it, all of them tested for
+    below and all of them a full disclosure of a record whose subject has not
+    answered it:
+
+      - the reply notice, which is a .md and never had a .json suffix to match
+      - the record committed anywhere other than records/
+      - the record pasted into a write-up, which is the shape that put
+        docs/outreach on the public site in the first place
+
+    Meanwhile the check printed "no held record is reachable from any commit",
+    which is a statement about the repository, not about records/*.json.
+
+    Every blob now gets read and searched for the held ids as text, and any
+    path whose basename is a file the manifest commits to is a hit on its name
+    alone, since the manifest names the reply documents that carry no id. The
+    manifest itself is skipped: an id belongs there, labelled as a holding.
+
+    Nothing found inside a blob is printed, returned or stored. The paths and
+    the ids come back; the contents do not.
+    """
+    blobs = blobs_in_history()
+    if blobs is None:
+        return None
+    manifest_name = os.path.basename(MANIFEST)
+    wanted = set(held_files or ())
+    ids = [i for i in ids if i]
+    hits = {}
+    for oid, path in blobs.items():
+        base = os.path.basename(path)
+        if base == manifest_name:
+            continue
+        if base in wanted:
+            hits.setdefault(base, set()).add(path)
+            continue
+        if not ids:
+            continue
+        # Read it whole. A size cap here would be an input skipped and counted
+        # as agreement, which is the defect this suite grades other people on,
+        # and a pasted record hides in a large file rather than a small one.
+        blob = git(["cat-file", "-p", oid])
+        if not blob:
+            continue
+        for rid in ids:
+            if rid in blob:
+                hits.setdefault(rid, set()).add(path)
     return hits
 
 
@@ -385,6 +430,59 @@ def held_ids_in_manifest():
             if r.get("record_id")}
 
 
+def message_leaks(ids):
+    """Held ids named in a commit message.
+
+    A commit message travels with the commit and is published with it. The
+    other two checks read what a tracked file says and what a blob in history
+    says, and a message is neither, so a commit that announces which record it
+    is holding walked the id straight past a scan whose whole job is to stop
+    that.
+
+    Not hypothetical. "record: hold <id>, and make the runner declare the gate
+    holding it" is the natural way to write the commit that issues a record,
+    and it is how one already reads in the working repository. That repository
+    has no remote, which is the only reason it is not a disclosure.
+
+    Returns {record_id: {commit sha}}. Never the message text.
+    """
+    ids = [i for i in ids if i]
+    if not ids:
+        return {}
+    out = git(["log", "--all", "--format=%x1e%H%x1f%B"])
+    if out is None:
+        return None
+    hits = {}
+    for chunk in out.split("\x1e"):
+        if not chunk.strip():
+            continue
+        sha, _, body = chunk.partition("\x1f")
+        for rid in ids:
+            if rid in body:
+                hits.setdefault(rid, set()).add(sha.strip()[:12])
+    return hits
+
+
+def held_files_in_manifest():
+    """The file names the manifest commits to, records and reply documents.
+
+    The reply documents carry no record_id, so ids alone cannot find them, and
+    a notice naming the subject and the finding is not less of a disclosure
+    than the record it accompanies.
+    """
+    if not os.path.exists(MANIFEST):
+        return set()
+    try:
+        with io.open(MANIFEST, encoding="utf-8") as fh:
+            manifest = json.load(fh)
+    except (IOError, OSError, ValueError):
+        return set()
+    if not isinstance(manifest, dict):
+        return set()
+    return {r["file"] for r in manifest.get("held", [])
+            if isinstance(r, dict) and r.get("file")}
+
+
 def disclosure_scan(ids):
     """What this repository would hand a stranger, given the ids to look for.
 
@@ -421,11 +519,11 @@ def disclosure_scan(ids):
                 "  identifier with no verdict attached, and the reader\n"
                 "  supplies the verdict.\n")
 
-    leaks = history_leaks(ids)
+    leaks = history_leaks(ids, held_files_in_manifest())
     if leaks:
         rc = 2
         sys.stderr.write(
-            "HELD RECORDS ARE STILL IN THIS REPOSITORY'S HISTORY:\n")
+            "HELD CONTENT IS STILL IN THIS REPOSITORY'S HISTORY:\n")
         for rid in sorted(leaks):
             sys.stderr.write("  %s: %s\n" % (rid, ", ".join(sorted(leaks[rid]))))
         sys.stderr.write(
@@ -439,8 +537,24 @@ def disclosure_scan(ids):
             "  first push, start the public repository from a fresh history,\n"
             "  or send the notices and wait out the windows so there is\n"
             "  nothing left to withhold.\n")
-    elif leaks is not None:
-        print("no held record is reachable from any commit")
+    said = message_leaks(ids)
+    if said:
+        rc = 2
+        sys.stderr.write("COMMIT MESSAGES NAMING A HELD RECORD:\n")
+        for rid in sorted(said):
+            sys.stderr.write("  %s: %s\n" % (rid, ", ".join(sorted(said[rid]))))
+        sys.stderr.write(
+            "  A message is published with its commit. Naming the record a\n"
+            "  commit holds is the natural way to write it and it puts the\n"
+            "  identifier in front of every reader with no verdict attached,\n"
+            "  which is the same disclosure as a tracked file naming one.\n"
+            "  Rewriting a message rewrites the commit, so this is a decision\n"
+            "  and not a cleanup: amend before the first push, or start the\n"
+            "  public history fresh, which is what was done here.\n")
+
+    if not leaks and leaks is not None and not said and said is not None:
+        print("no held record is reachable from any commit or named in a "
+              "message")
     return rc
 
 
