@@ -410,6 +410,118 @@ check("entity / unparseable payload resolves to INDETERMINATE not PASS",
       classify_entity("<html>error</html>", "Apple Inc."),
       INDETERMINATE, None, "quiet")
 
+# A shared word is not an identity. `if a & b` used to PASS on one token in
+# common, and containment used to PASS on a registrant name that reduces to a
+# single common word, which clears "Apple Hospitality REIT, Inc." against
+# registrant "Apple Inc." -- two different listed companies, waved through by
+# the one probe whose job is catching a tool that answered for a different
+# entity.
+check("entity / a namesake with a longer name is not affirmed",
+      classify_entity(json.dumps({"longName": "Apple Hospitality REIT, Inc."}),
+                      "Apple Inc."),
+      INDETERMINATE, None, "detect")
+
+check("entity / a namesake with a different second word is not affirmed",
+      classify_entity(json.dumps({"longName": "Ford Foundation"}),
+                      "Ford Motor Company"),
+      INDETERMINATE, None, "detect")
+
+check("entity / a shared word is not enough to accuse of wrong_entity either",
+      classify_entity(json.dumps({"longName": "First National"}),
+                      "National Grid plc"),
+      INDETERMINATE, None, "detect")
+
+check("entity / names that reduce to nothing cannot be compared",
+      classify_entity(json.dumps({"longName": "Inc."}), "Corp"),
+      INDETERMINATE, None, "detect")
+
+# The other half: vendor decoration on a security name must not read as a
+# different registrant, or the probe trades a false clear for a false alarm.
+check("entity / share class decoration is not a different registrant",
+      classify_entity(json.dumps({"longName": "Alphabet Inc. Class A"}),
+                      "Alphabet Inc."),
+      PASS, None, "quiet")
+
+check("entity / a vendor 'New' suffix is not a different registrant",
+      classify_entity(json.dumps({"longName": "Berkshire Hathaway Inc. New"}),
+                      "BERKSHIRE HATHAWAY INC"),
+      PASS, None, "quiet")
+
+check("entity / suffix-only differences across a long name stay quiet",
+      classify_entity(
+          json.dumps({"longName":
+                      "Taiwan Semiconductor Manufacturing Company Limited"}),
+          "TAIWAN SEMICONDUCTOR MANUFACTURING CO LTD"),
+      PASS, None, "quiet")
+
+# ============================================ 8b. authority A2 cache discipline
+# a2_edgar returning None means "the SEC file does not list this ticker", and
+# classify_entity publishes that as OUT_OF_SCOPE. So a None that came from a
+# failed read is a claim about the SEC's file that the harness never read.
+# _get_json is stubbed here: still no network, still no subprocess.
+import harness as _h
+
+def _edgar_probe(payload):
+    """Run a2_edgar against a stubbed registrant file.
+    Returns (state, observable, detail) so check() can assert on it."""
+    saved, _h._get_json = _h._get_json, lambda url, **kw: payload
+    _h._EDGAR_CACHE.clear()
+    try:
+        got = _h.a2_edgar("AAPL")
+        return ("returned", got, f"cache holds {len(_h._EDGAR_CACHE)} rows")
+    except _h.AuthorityUnavailable as e:
+        return ("refused", len(_h._EDGAR_CACHE), str(e)[:160])
+    except Exception as e:
+        return ("RAISED:%s" % type(e).__name__, str(e)[:80], "a2_edgar raised")
+    finally:
+        _h._get_json = saved
+        _h._EDGAR_CACHE.clear()
+
+GOOD_FILE = {"0": {"ticker": "aapl", "title": "Apple Inc."},
+             "1": {"ticker": "msft", "title": "MICROSOFT CORP"}}
+TORN_FILE = {"0": {"ticker": "aapl", "title": "Apple Inc."},
+             "1": {"cik_str": 789019}}
+
+check("edgar / a clean registrant file resolves the ticker",
+      _edgar_probe(GOOD_FILE), "returned", "Apple Inc.", "quiet")
+
+check("edgar / a torn registrant file refuses instead of answering",
+      _edgar_probe(TORN_FILE), "refused", 0, "detect")
+
+check("edgar / an empty registrant file refuses",
+      _edgar_probe({}), "refused", 0, "detect")
+
+check("edgar / a registrant file that is not an object refuses",
+      _edgar_probe([{"ticker": "aapl", "title": "Apple Inc."}]),
+      "refused", 0, "detect")
+
+def _edgar_retry_probe():
+    """A failed read must not poison the cache. The first read is torn, the
+    second is clean; the second must be attempted and must answer."""
+    reads = {"n": 0}
+    def stub(url, **kw):
+        reads["n"] += 1
+        return TORN_FILE if reads["n"] == 1 else GOOD_FILE
+    saved, _h._get_json = _h._get_json, stub
+    _h._EDGAR_CACHE.clear()
+    try:
+        try:
+            _h.a2_edgar("AAPL")
+        except _h.AuthorityUnavailable:
+            pass
+        return ("retried", _h.a2_edgar("AAPL"), f"{reads['n']} reads attempted")
+    except _h.AuthorityUnavailable as e:
+        return ("still refusing", None, str(e)[:120])
+    except Exception as e:
+        return ("RAISED:%s" % type(e).__name__, str(e)[:80], "a2_edgar raised")
+    finally:
+        _h._get_json = saved
+        _h._EDGAR_CACHE.clear()
+
+check("edgar / a failed read is retried rather than cached as an answer",
+      _edgar_retry_probe(), "retried", "Apple Inc.", "detect")
+
+
 # ==================================================== 9. schema_drift channel
 check("channel / non-JSON written to the JSON-RPC channel",
       classify_channel(["Company ticker ZZZZ not found."], ""),

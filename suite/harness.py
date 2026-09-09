@@ -378,11 +378,40 @@ def a1_chart(ticker, rng="5d", interval="1d"):
 
 _EDGAR_CACHE = {}
 def a2_edgar(ticker):
-    """Authority A2. Returns registrant title for a ticker, or None."""
+    """Authority A2. Returns registrant title for a ticker, or None.
+
+    The read is built into a local dict and only published to the cache once it
+    finishes. It used to write rows into _EDGAR_CACHE as it walked them, so a
+    read that died partway left the cache non-empty, `if not _EDGAR_CACHE` was
+    false ever after, and no later call retried. Every ticker missing from the
+    fragment then returned None, which classify_entity reports as OUT_OF_SCOPE,
+    "ticker not present in the SEC registrant file" -- a claim about the SEC's
+    file derived from a read that failed. A None here has to mean the authority
+    said so, not that the harness stopped listening."""
     if not _EDGAR_CACHE:
         d = _get_json(CONFIG["authorities"]["A2"]["endpoint"])
+        if not isinstance(d, dict) or not d:
+            raise AuthorityUnavailable(
+                CONFIG["authorities"]["A2"]["endpoint"], status=200,
+                reason="registrant file was not a non-empty object")
+        built, skipped = {}, 0
         for row in d.values():
-            _EDGAR_CACHE[row["ticker"].upper()] = row["title"]
+            try:
+                built[row["ticker"].upper()] = row["title"]
+            except (KeyError, AttributeError, TypeError):
+                skipped += 1
+        if not built:
+            raise AuthorityUnavailable(
+                CONFIG["authorities"]["A2"]["endpoint"], status=200,
+                reason=f"no usable rows in the registrant file "
+                       f"({skipped} unreadable)")
+        if skipped > len(built) * 0.01:
+            raise AuthorityUnavailable(
+                CONFIG["authorities"]["A2"]["endpoint"], status=200,
+                reason=f"{skipped} of {skipped + len(built)} registrant rows "
+                       f"were unreadable, so an absent ticker cannot be "
+                       f"distinguished from a partial read")
+        _EDGAR_CACHE.update(built)
     return _EDGAR_CACHE.get(ticker.upper())
 
 # ------------------------------------------------------- pure classification
@@ -390,10 +419,22 @@ _SUFFIX = re.compile(
     r"\b(inc|incorporated|corp|corporation|co|company|ltd|limited|plc|"
     r"holdings|group|the|sa|nv|ag|class|common|stock)\b")
 
+# Decorations an exchange or a data vendor appends to the name of a security
+# without naming a different legal entity: share class, instrument type,
+# depositary wrappers. Stripped from both sides of every comparison, so they
+# can only make two names agree, never make them differ.
+_DECOR = re.compile(
+    r"\b(shares|share|ordinary|adr|ads|sponsored|unsponsored|depositary|"
+    r"depository|receipts|receipt|series|new)\b")
+
 def _norm_name(s):
     s = re.sub(r"[^a-z0-9 ]", " ", (s or "").lower())
     s = _SUFFIX.sub(" ", s)
-    return set(t for t in s.split() if t)
+    s = _DECOR.sub(" ", s)
+    # A one-character token cannot distinguish two companies. Left in, it is
+    # almost always the share-class letter that survives stripping "class"
+    # ("Alphabet Inc. Class A" -> {alphabet, a}). Dropped from both sides.
+    return set(t for t in s.split() if len(t) > 1)
 
 def parse_bars(text):
     """Parse the subject's historical-prices payload. Returns (bars, note).
@@ -824,11 +865,37 @@ def classify_entity(info_text, registrant):
     if not name:
         return INDETERMINATE, None, "no name field in payload"
     a, b = _norm_name(name), _norm_name(registrant)
-    if a & b:
+    if not a or not b:
+        return (INDETERMINATE, None,
+                f"one of the names reduces to nothing once corporate suffixes "
+                f"are stripped (subject '{name}', registrant '{registrant}'), "
+                f"so they cannot be compared")
+    # `if a & b` passed on a single shared token. "Apple Hospitality REIT"
+    # matched registrant "Apple Inc.", "Ford Foundation" matched "Ford Motor
+    # Company", "First National" matched "National Grid plc" -- pairs of
+    # unrelated listed companies, cleared by the probe whose only job is to
+    # catch a tool answering for the wrong entity.
+    #
+    # Containment is not a match either. A registrant name that reduces to one
+    # common word is a subset of every longer name containing that word, so
+    # "Apple Hospitality REIT, Inc." contains "Apple Inc." and is a different
+    # registrant. Only agreement on the whole name affirms the entity. Overlap
+    # short of that is also not enough to accuse -- this file already records
+    # two false wrong-entity verdicts published against real maintainers -- so
+    # the middle ground declines rather than guesses in either direction.
+    if a == b:
         return PASS, None, f"subject '{name}' matches registrant '{registrant}'"
+    shared = a & b
+    if shared:
+        return (INDETERMINATE, None,
+                f"subject '{name}' and registrant '{registrant}' agree on "
+                f"{sorted(shared)} and differ on {sorted(a ^ b)}. A shared word "
+                f"is not an identity, and the words left over are not enough to "
+                f"establish that the subject answered for a different entity, "
+                f"so this probe affirms neither.")
     return (FAIL_UNSAFE, "wrong_entity",
             f"subject reports '{name}' where the SEC registrant for this ticker "
-            f"is '{registrant}'")
+            f"is '{registrant}', with no term in common")
 
 def classify_channel(noise, stderr_text):
     """Probe: did the server write non-JSON onto the JSON-RPC framing channel?"""
