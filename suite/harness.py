@@ -531,18 +531,29 @@ def classify_fidelity(subject_bars, authority_bars, tol,
     if not authority_bars:
         return INDETERMINATE, None, "authority returned no bars to compare"
     sub = {}
+    unreadable = 0
     for b in subject_bars:
+        if not isinstance(b, dict):
+            unreadable += 1
+            continue
         d = str(b.get("Date", ""))[:10]
         c = b.get("Close")
-        if d and isinstance(c, (int, float)):
+        if d and _numeric(c):
             sub[d] = c
+        else:
+            unreadable += 1
     auth = {}
     for b in authority_bars:
         if b.get("close") is None:
             continue
         auth[_auth_date(b)] = b["close"]
     common = sorted(set(sub) & set(auth))
-    smaller = min(len(sub), len(auth))
+    # Measured against what the subject actually sent, not against what survived
+    # parsing. Using len(sub) meant a payload whose closes were unreadable got a
+    # BETTER overlap ratio for having been dropped: three of five bars arriving
+    # as strings left two clean ones, two of two aligned, and the floor was
+    # satisfied by discarding the evidence against it.
+    smaller = min(len(subject_bars), len(auth))
     if not common:
         return (INDETERMINATE, None,
                 f"no overlapping dates. subject={sorted(sub)[:3]} "
@@ -555,12 +566,23 @@ def classify_fidelity(subject_bars, authority_bars, tol,
                 "separated from a date-basis misalignment, so no fidelity "
                 "verdict is issued.")
     worst, worst_d = 0.0, None
+    compared = 0
     for d in common:
         if auth[d] == 0:
             continue
+        compared += 1
         rel = abs(sub[d] - auth[d]) / abs(auth[d])
         if rel > worst:
             worst, worst_d = rel, d
+    if compared == 0:
+        # Every aligned session had an authority close of zero, so the relative
+        # deviation was undefined for all of them and none was measured. This
+        # used to fall through with worst still 0.0 and report "worst deviation
+        # 0.00000% within tolerance" about zero comparisons.
+        return (INDETERMINATE, None,
+                f"{len(common)} sessions aligned by date but the authority "
+                f"close was zero for every one of them, so relative deviation "
+                f"was undefined and nothing was compared")
     if worst > tol:
         lag = _uniform_lag(sub, auth, tol)
         if lag:
@@ -576,8 +598,14 @@ def classify_fidelity(subject_bars, authority_bars, tol,
                 f"upstream read directly (subject={sub[worst_d]}, "
                 f"authority={auth[worst_d]}), beyond the {tol*100:.2f}% pinned "
                 "tolerance")
+    if unreadable:
+        return (INDETERMINATE, None,
+                f"{unreadable} of {len(subject_bars)} subject bars carried no "
+                f"readable numeric Close and were not compared; {compared} "
+                f"sessions were, worst deviation {worst*100:.5f}%. A payload "
+                f"that is partly unreadable is not a payload that agreed")
     return (PASS, None,
-            f"{len(common)} overlapping sessions, worst deviation "
+            f"{compared} overlapping sessions compared, worst deviation "
             f"{worst*100:.5f}% within tolerance")
 
 def _uniform_lag(sub, auth, tol):

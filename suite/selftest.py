@@ -630,6 +630,30 @@ gate("subject / a string that is not a remote is not treated as one",
      _repo("not a url") is None,
      True, "quiet")
 
+# ==================== 10f. fidelity payloads that used to be called clean
+# Same shape as the ohlc cases above, one probe over. A bar the comparison
+# could not use is not a bar that agreed.
+
+_fdays = ["2026-07-2%d" % i for i in range(1, 6)]
+_fsub = [bar(d, 100.0, 100.0, 100.0, 100.0) for d in _fdays]
+
+check("fidelity / an authority close of zero everywhere is not a pass",
+      classify_fidelity(_fsub,
+                        auth_bars([(d, 0.0) for d in _fdays]), TOL),
+      INDETERMINATE, None, "quiet")
+
+_fmixed = [dict(b) for b in _fsub]
+for _b in _fmixed[:3]:
+    _b["Close"] = str(_b["Close"])
+check("fidelity / dropping unreadable closes must not improve the overlap",
+      classify_fidelity(_fmixed,
+                        auth_bars([(d, 100.0) for d in _fdays]), TOL),
+      INDETERMINATE, None, "quiet")
+
+check("fidelity / a fully readable matching payload still passes",
+      classify_fidelity(_fsub, auth_bars([(d, 100.0) for d in _fdays]), TOL),
+      PASS, None, "quiet")
+
 # ======================================================== 11. aggregation
 _agg = [
     ([PASS, PASS, PASS], PASS),
