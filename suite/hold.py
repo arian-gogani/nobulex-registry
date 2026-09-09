@@ -42,7 +42,13 @@ never carry the records, so every check above inverts there, and running the
 wrong one is loud in both directions. See --verify-export.
 
 Usage:  python3 suite/hold.py --commit   (write the manifest from the records)
-        python3 suite/hold.py --verify   (fail if a held record was altered)
+        python3 suite/hold.py --commit --amend
+                                         (also rewrite a commitment HEAD
+                                          already carries, which --commit
+                                          refuses to do quietly)
+        python3 suite/hold.py --verify   (fail if a held record was altered,
+                                          or if the manifest committing to it
+                                          was itself rewritten)
         python3 suite/hold.py --audit    (also search git for leaked content)
         python3 suite/hold.py --verify-export
                                          (for the public repo, where the
@@ -153,7 +159,68 @@ MANIFEST_PURPOSE = (
     "the accusation while withholding the evidence for it.")
 
 
-def cmd_commit():
+def manifest_at_head():
+    """The manifest as the last commit has it, keyed by file name.
+
+    Returns None when git cannot answer, which is a different fact from an
+    empty manifest and is left to the caller to say out loud.
+    """
+    rel = os.path.relpath(MANIFEST, ROOT).replace(os.sep, "/")
+    blob = git(["show", "HEAD:%s" % rel])
+    if blob is None:
+        return None
+    try:
+        m = json.loads(blob)
+    except ValueError:
+        return None
+    if not isinstance(m, dict):
+        return None
+    return {r["file"]: r for r in m.get("held", [])
+            if isinstance(r, dict) and r.get("file")}
+
+
+def rewritten_commitments(head, disk):
+    """Entries whose sha256 differs between the manifest in HEAD and the one
+    on disk. Returns [(file, was_sha, now_sha, was_bytes, now_bytes)].
+
+    This is the hole --verify had. It compared the held records against the
+    manifest sitting next to them, so altering a record and re-running
+    --commit produced two files that agree with each other and a green check
+    that said "all matching the committed hashes". Nothing was committed. The
+    commitment is only worth something while it is compared against a version
+    of the manifest that is in history and cannot be rewritten by the same
+    hand that rewrote the record.
+
+    It was not hypothetical when this was written: a held record under an open
+    reply window was 1009 bytes larger than the manifest committed to five
+    hours earlier, the manifest on disk had been regenerated to match, and
+    --verify reported seven files clean. git status was the only thing that
+    knew.
+
+    Pure, and takes both sides as arguments, so the selftest can drive it
+    without a repository.
+    """
+    out = []
+    for name, was in sorted((head or {}).items()):
+        now = (disk or {}).get(name)
+        if now is None:
+            continue
+        if was.get("sha256") != now.get("sha256"):
+            out.append((name, was.get("sha256"), now.get("sha256"),
+                        was.get("bytes"), now.get("bytes")))
+    return out
+
+
+def dropped_commitments(head, disk):
+    """Files HEAD commits to that the manifest on disk no longer lists.
+
+    Deleting the entry is the other way to make an altered record verify
+    clean, and it leaves less of a trace than changing the hash.
+    """
+    return sorted(set(head or {}) - set(disk or {}))
+
+
+def cmd_commit(amend=False):
     names = held_names()
     manifest = {
         "schema": "nobulex.held.manifest.v0",
@@ -161,6 +228,31 @@ def cmd_commit():
         "held_count": len(names),
         "held": [entry(n) for n in names],
     }
+
+    # Rewriting an entry that HEAD already commits to is how a commitment
+    # stops being one: the record is edited, this command is re-run, and every
+    # check downstream compares two files that were changed together. Adding a
+    # new record is the ordinary case and is not this. Amending an existing
+    # one has to be asked for by name, so that it appears in the shell history
+    # and in whatever the person writes in the commit message afterwards.
+    head = manifest_at_head()
+    fresh = {r["file"]: r for r in manifest["held"]}
+    would_rewrite = rewritten_commitments(head, fresh)
+    if would_rewrite and not amend:
+        sys.stderr.write("REFUSED: this would rewrite a commitment already "
+                         "in HEAD.\n")
+        for name, was, now, wb, nb in would_rewrite:
+            sys.stderr.write(
+                "  %s\n    HEAD: %s bytes  %s\n    disk: %s bytes  %s\n"
+                % (name, wb, (was or "")[:16], nb, (now or "")[:16]))
+        sys.stderr.write(
+            "  Nothing was written. The manifest is what fixes a held\n"
+            "  record's contents while its subject has the right to answer\n"
+            "  it, so replacing the hash of a record that is already\n"
+            "  committed to is the one edit this file exists to make\n"
+            "  difficult. If the record legitimately changed, re-run with\n"
+            "  --amend and say in the commit message what changed and why.\n")
+        return 2
     # No generation timestamp anywhere in here. A timestamp would change the
     # file on every run, which makes the diff meaningless, and a manifest
     # whose diff is meaningless cannot be used to show that nothing changed.
@@ -212,11 +304,52 @@ def cmd_verify(quiet=False):
             "  Nothing fixes this record's contents yet, so nothing would\n"
             "  show it being edited. Run: python3 suite/hold.py --commit\n"
             % "\n  ".join(uncommitted))
-    if altered or missing or uncommitted:
+    # The three checks above compare the records against the manifest sitting
+    # beside them. Both are writable by the same hand in the same minute, so
+    # agreeing with each other establishes nothing on its own. What fixes a
+    # verdict is the manifest in history.
+    head = manifest_at_head()
+    rewritten = rewritten_commitments(head, want)
+    dropped = dropped_commitments(head, want)
+
+    if rewritten:
+        sys.stderr.write(
+            "THE COMMITMENT ITSELF WAS REWRITTEN:\n")
+        for name, was, now, wb, nb in rewritten:
+            sys.stderr.write(
+                "  %s\n    HEAD: %s bytes  %s\n    disk: %s bytes  %s\n"
+                % (name, wb, (was or "")[:16], nb, (now or "")[:16]))
+        sys.stderr.write(
+            "  The record changed and the manifest changed with it, so the\n"
+            "  two agree and this check would otherwise pass. A held record's\n"
+            "  verdict is fixed when it is issued and the reply window cannot\n"
+            "  change it, which is a claim about the manifest in history, not\n"
+            "  about the copy on disk. If the edit was legitimate, commit the\n"
+            "  manifest in a commit that says what changed and why. The diff\n"
+            "  is the only thing a stranger will have to judge it by, and a\n"
+            "  rewritten commitment with no explanation beside it reads as\n"
+            "  the thing this gate exists to prevent.\n")
+    if dropped:
+        sys.stderr.write(
+            "COMMITTED TO IN HEAD, NO LONGER IN THE MANIFEST:\n  %s\n"
+            "  Dropping the entry is the quieter way to make an altered\n"
+            "  record verify clean. A held file leaves the manifest when it\n"
+            "  publishes, and then it is hashed in public.\n"
+            % "\n  ".join(dropped))
+
+    if altered or missing or uncommitted or rewritten or dropped:
         return 2
     if not quiet:
-        print("%d held file%s, all matching the committed hashes"
-              % (len(have), "" if len(have) == 1 else "s"))
+        if head is None:
+            print("%d held file%s match the manifest on disk. git could not "
+                  "read the\n  manifest at HEAD, so nothing here compared it "
+                  "against a version\n  that cannot be rewritten. That is a "
+                  "weaker check than it looks."
+                  % (len(have), "" if len(have) == 1 else "s"))
+        else:
+            print("%d held file%s match the manifest, and the manifest "
+                  "matches HEAD"
+                  % (len(have), "" if len(have) == 1 else "s"))
     return 0
 
 
@@ -494,7 +627,7 @@ def cmd_verify_export():
 
 def main(argv):
     if "--commit" in argv:
-        return cmd_commit()
+        return cmd_commit(amend="--amend" in argv)
     if "--verify-export" in argv:
         return cmd_verify_export()
     if "--audit" in argv:

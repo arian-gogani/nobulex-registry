@@ -13,8 +13,11 @@ It also feeds each one a clean fixture and asserts it does NOT fire. A
 classifier that returns FAIL_UNSAFE for every input detects nothing; it just
 has a stuck needle. Both halves are required.
 
-No network. No subprocess. The classifiers are pure, which is the entire
-reason this file can exist.
+No network. The classifiers are pure, which is the entire reason this file
+can exist, and nothing above section 10d starts a process. The two
+repository-level sections do: hold.py's checks are about what git has,
+and a fixture that cannot hold a commit cannot test them. Those build
+throwaway repositories in temp directories and delete them.
 
 Exit code 0 only if every case passes. Anything else means no verdict this
 harness issues is worth publishing.
@@ -763,6 +766,173 @@ gate("export / a held record under a name the manifest does not list is refused"
 gate("export / a held record under its manifest name is refused",
      lambda: _export_rc(held=["NBLX-00000000-000.json"]),
      2, "detect")
+
+
+# ========== 10e. the commitment, checked against history instead of itself
+#
+# --verify compared the held records against the manifest sitting beside them.
+# Edit a record, re-run --commit, and both files change together: they agree,
+# and the check printed "all matching the committed hashes" with nothing of
+# the sort established. What fixes a verdict is the manifest in history, so
+# these build a real repository, which is the only fixture that has one.
+
+import subprocess as _sub
+
+_FAKE_ID = "NBLX-00000000-000"
+_FAKE_FILE = _FAKE_ID + ".json"
+
+def _git(root, *args):
+    _sub.check_output(["git", "-c", "user.email=selftest@localhost",
+                       "-c", "user.name=selftest"] + list(args),
+                      cwd=root, stderr=_sub.DEVNULL)
+
+def _commitment_repo(body='{"record_id": "%s"}' % _FAKE_ID):
+    """A repository with one held record and a committed manifest for it.
+
+    The record is deliberately left untracked, which is how the real
+    repository stores held records and is the whole reason the manifest
+    exists.
+    """
+    root = _tmp.mkdtemp(prefix="nbx-commit-")
+    held = _os.path.join(root, "records", "held")
+    _os.makedirs(held)
+    with _io.open(_os.path.join(held, _FAKE_FILE), "w", encoding="utf-8") as fh:
+        fh.write(body)
+    return root
+
+def _point_hold_at(root):
+    saved = (_hold.ROOT, _hold.RECORDS, _hold.HELD, _hold.MANIFEST,
+             _hold.REGISTER)
+    _hold.ROOT = root
+    _hold.RECORDS = _os.path.join(root, "records")
+    _hold.HELD = _os.path.join(root, "records", "held")
+    _hold.MANIFEST = _os.path.join(root, "records", "held.manifest.json")
+    _hold.REGISTER = _os.path.join(root, "brand", "register.html")
+    return saved
+
+def _quiet(fn, *a, **kw):
+    import contextlib
+    with contextlib.redirect_stderr(_io.StringIO()):
+        with contextlib.redirect_stdout(_io.StringIO()):
+            return fn(*a, **kw)
+
+def _commitment_rc(after=None):
+    """Build the repo, commit the manifest, run `after`, return --verify's rc.
+
+    after(root) is the tampering under test, and runs after the commitment is
+    in history, which is the only point at which tampering means anything.
+    """
+    root = _commitment_repo()
+    saved = _point_hold_at(root)
+    try:
+        _quiet(_hold.cmd_commit)
+        _git(root, "init", "-q")
+        _git(root, "add", "records/held.manifest.json")
+        _git(root, "commit", "-q", "-m", "commit to the held record")
+        if after is not None:
+            after(root)
+        return _quiet(_hold.cmd_verify)
+    except _sub.CalledProcessError as e:
+        return "git fixture failed: %s" % e
+    finally:
+        (_hold.ROOT, _hold.RECORDS, _hold.HELD, _hold.MANIFEST,
+         _hold.REGISTER) = saved
+        _sh.rmtree(root, ignore_errors=True)
+
+def _edit_record_and_rewrite_manifest(root):
+    """The loophole, performed exactly as it happens.
+
+    The manifest is rewritten here by hand rather than through --commit, so
+    this fixture runs unchanged against the version of hold.py that had the
+    hole. It returned 0 on this: two files altered together agree with each
+    other, and agreeing with each other was the whole check.
+    """
+    path = _os.path.join(root, "records", "held", _FAKE_FILE)
+    with _io.open(path, "w", encoding="utf-8") as fh:
+        fh.write('{"record_id": "%s", "verdict": "PASS"}' % _FAKE_ID)
+    man = _os.path.join(root, "records", "held.manifest.json")
+    with _io.open(man, encoding="utf-8") as fh:
+        m = _json.load(fh)
+    m["held"] = [_hold.entry(_FAKE_FILE)]
+    with _io.open(man, "w", encoding="utf-8") as fh:
+        _json.dump(m, fh, indent=2)
+
+def _delete_record_and_drop_the_entry(root):
+    """The quieter version: remove the record and the line committing to it.
+
+    Dropping the entry alone was already caught, as a held file nothing
+    commits to. Removing both left the old check with an empty set on each
+    side, which it reported as clean while HEAD still committed to the
+    record.
+    """
+    _os.remove(_os.path.join(root, "records", "held", _FAKE_FILE))
+    path = _os.path.join(root, "records", "held.manifest.json")
+    with _io.open(path, encoding="utf-8") as fh:
+        m = _json.load(fh)
+    m["held"] = []
+    m["held_count"] = 0
+    with _io.open(path, "w", encoding="utf-8") as fh:
+        _json.dump(m, fh, indent=2)
+
+def _commit_without_amend_rc():
+    """--commit must refuse to rewrite a commitment HEAD already carries, and
+    must leave the manifest on disk untouched when it refuses."""
+    root = _commitment_repo()
+    saved = _point_hold_at(root)
+    try:
+        _quiet(_hold.cmd_commit)
+        _git(root, "init", "-q")
+        _git(root, "add", "records/held.manifest.json")
+        _git(root, "commit", "-q", "-m", "commit to the held record")
+        before = _io.open(_hold.MANIFEST, encoding="utf-8").read()
+        with _io.open(_os.path.join(root, "records", "held", _FAKE_FILE),
+                      "w", encoding="utf-8") as fh:
+            fh.write('{"record_id": "%s", "verdict": "PASS"}' % _FAKE_ID)
+        rc = _quiet(_hold.cmd_commit)
+        after = _io.open(_hold.MANIFEST, encoding="utf-8").read()
+        return (rc, before == after)
+    except _sub.CalledProcessError as e:
+        return "git fixture failed: %s" % e
+    finally:
+        (_hold.ROOT, _hold.RECORDS, _hold.HELD, _hold.MANIFEST,
+         _hold.REGISTER) = saved
+        _sh.rmtree(root, ignore_errors=True)
+
+gate("commitment / an untouched record and manifest verify clean",
+     lambda: _commitment_rc(), 0, "quiet")
+
+gate("commitment / a record edited and its manifest re-written is caught",
+     lambda: _commitment_rc(_edit_record_and_rewrite_manifest), 2, "detect")
+
+gate("commitment / deleting the record and its entry is not a clean verify",
+     lambda: _commitment_rc(_delete_record_and_drop_the_entry), 2, "detect")
+
+gate("commitment / --commit refuses to rewrite a commitment and writes nothing",
+     _commit_without_amend_rc, (2, True), "detect")
+
+# Pure, so they run whether or not git is installed.
+gate("commitment / an unchanged hash is not reported as rewritten",
+     lambda: _hold.rewritten_commitments(
+         {"a.json": {"sha256": "x", "bytes": 1}},
+         {"a.json": {"sha256": "x", "bytes": 1}}) == [],
+     True, "quiet")
+
+gate("commitment / a changed hash is reported with both sides",
+     lambda: _hold.rewritten_commitments(
+         {"a.json": {"sha256": "x", "bytes": 1}},
+         {"a.json": {"sha256": "y", "bytes": 2}})
+     == [("a.json", "x", "y", 1, 2)],
+     True, "detect")
+
+gate("commitment / a newly held record is not a rewritten commitment",
+     lambda: _hold.rewritten_commitments(
+         {}, {"new.json": {"sha256": "y", "bytes": 2}}) == [],
+     True, "quiet")
+
+gate("commitment / a manifest git cannot read is not read as agreement",
+     lambda: _hold.rewritten_commitments(
+         None, {"a.json": {"sha256": "y", "bytes": 2}}) == [],
+     True, "quiet")
 
 # ================= 10e. the subject tuple names the subject, not the folder
 # run.py used os.path.basename(subject_dir) as the package name. That is the
