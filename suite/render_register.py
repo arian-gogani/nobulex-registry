@@ -60,6 +60,7 @@ RECORDS = os.path.join(ROOT, "records")
 # public page has to be compiled from evidence rather than typed, or it is one
 # more sentence that can drift away from what is true.
 HELD_DIR = os.path.join(RECORDS, "held")
+MANIFEST_PATH = os.path.join(RECORDS, "held.manifest.json")
 MANIFEST_SCHEMA = "nobulex.held.manifest.v0"
 
 # The only publication statuses that permit a record onto the public page.
@@ -155,6 +156,51 @@ def load_all():
     out = [(n, r) for n, r in load(RECORDS) + load(HELD_DIR)
            if r.get("schema") != MANIFEST_SCHEMA]
     return sorted(out, key=lambda p: p[1].get("record_id", p[0]))
+
+
+def manifest_record_ids():
+    """The held record ids the tracked manifest commits to.
+
+    Entries with no record_id are the reply documents held alongside the
+    records. They are committed to as files and are not records, so they are
+    not counted here. Returns None when there is no readable manifest, which
+    is a different fact from an empty one and is left to the caller.
+    """
+    try:
+        with io.open(MANIFEST_PATH, encoding="utf-8") as fh:
+            m = json.load(fh)
+    except (IOError, OSError, ValueError):
+        return None
+    if not isinstance(m, dict) or m.get("schema") != MANIFEST_SCHEMA:
+        return None
+    entries = m.get("held")
+    if not isinstance(entries, list):
+        return None
+    return set(e["record_id"] for e in entries
+               if isinstance(e, dict) and e.get("record_id"))
+
+
+def missing_held(committed, present):
+    """Held records the manifest commits to that this checkout cannot read.
+
+    Held records are deliberately absent from version control, so a clone of
+    this repository carries the manifest and none of the files it commits to.
+    The held count on the public page is compiled from the records the
+    renderer can see, which means running it in such a clone rewrites the page
+    to say nothing is held while the tracked manifest commits to three. That
+    is a claim about this registry's own conduct compiled from an absence, and
+    it is the same defect this suite keeps finding in other people's code: a
+    skipped input counted as agreement.
+
+    It is not hypothetical. It was done in a partial checkout during an audit,
+    and the page was rewritten to '0 issued and held' before anything noticed.
+    What noticed was hold.py --verify-export, which reads the written file --
+    one guard, one step too late. Both sets are ids, and this is pure so the
+    selftest can drive it.
+    """
+    if committed is None:
+        return set()
+    return set(committed) - set(present)
 
 
 def subject_strings(rec):
@@ -756,6 +802,38 @@ def targets(argv):
 
 
 def main(argv):
+    # Before anything is read for rendering, and before --check compares the
+    # published copies against a build, confirm this checkout can actually see
+    # the records it is about to compile a count from. Rendering from a
+    # partial clone does not fail: it succeeds and publishes a smaller number.
+    committed = manifest_record_ids()
+    if committed is None and os.path.exists(MANIFEST_PATH):
+        sys.stderr.write(
+            "REFUSED: %s is present but could not be read as a manifest.\n"
+            "  Nothing was written. An unreadable manifest is not an empty\n"
+            "  one, and the check that this checkout holds every record it\n"
+            "  commits to cannot run without it. Repair it, or run\n"
+            "  suite/hold.py --commit where the records live to rewrite it.\n"
+            % os.path.relpath(MANIFEST_PATH, ROOT))
+        return 2
+    absent = missing_held(committed, set(
+        r.get("record_id") for _, r in load(HELD_DIR)))
+    if absent:
+        sys.stderr.write(
+            "REFUSED: the manifest commits to %d held record%s and %d of them\n"
+            "  cannot be read here.\n"
+            "  %s\n"
+            "  Nothing was written. Held records are not in version control,\n"
+            "  so this is the expected state of a fresh or partial clone, and\n"
+            "  the renderer compiles the held count from the records it can\n"
+            "  see. Building here would publish '0 issued and held' over a\n"
+            "  manifest that commits to more, which reads as this registry\n"
+            "  having quietly dropped findings it is holding. Build where the\n"
+            "  records live.\n"
+            % (len(committed), "" if len(committed) == 1 else "s",
+               len(absent), ", ".join(sorted(absent))))
+        return 2
+
     if "--preview" in argv:
         html, n_shown, n_held, n_dead, _, _ = build(preview=True)
         d = os.path.dirname(PREVIEW)

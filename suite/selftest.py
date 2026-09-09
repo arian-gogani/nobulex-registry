@@ -521,7 +521,6 @@ def _edgar_retry_probe():
 check("edgar / a failed read is retried rather than cached as an answer",
       _edgar_retry_probe(), "retried", "Apple Inc.", "detect")
 
-
 # ==================================================== 9. schema_drift channel
 check("channel / non-JSON written to the JSON-RPC channel",
       classify_channel(["Company ticker ZZZZ not found."], ""),
@@ -584,53 +583,98 @@ check("truncation / equal counts over non-overlapping windows is not a pass",
 
 import render_register as _rr
 
-def gate(name, got, want, kind):
+def gate(name, thunk, want, kind):
+    """A predicate under test, passed as a thunk rather than as a value.
+
+    Same reason as safe() above, found the same way. These used to be called
+    for their value, so a predicate that raised -- or one this file names
+    before it exists -- took the whole run down at that line and every case
+    after it went unrun. The exit code stayed red, so nothing could pass
+    unnoticed, but the report stopped at a traceback instead of naming which
+    check failed, and the checks below it were never reached.
+    """
+    try:
+        got = thunk()
+    except Exception as e:
+        got = "RAISED:%s: %s" % (type(e).__name__, str(e)[:60])
     _results.append((got == want, kind, name, got, None, want, None, ""))
 
 gate("gate / a record with no publication block is held, not published",
-     _rr.is_held({"record_id": "X", "subject": {"package": "some-server"}}),
+     lambda: _rr.is_held({"record_id": "X", "subject": {"package": "some-server"}}),
      True, "detect")
 
 gate("gate / publication status 'held' in lower case is still held",
-     _rr.is_held({"record_id": "X", "publication": {"status": "held"}}),
+     lambda: _rr.is_held({"record_id": "X", "publication": {"status": "held"}}),
      True, "detect")
 
 gate("gate / a status that is not an explicit clearance is held",
-     _rr.is_held({"record_id": "X", "publication": {"status": "HELD_PENDING_REPLY"}}),
+     lambda: _rr.is_held({"record_id": "X", "publication": {"status": "HELD_PENDING_REPLY"}}),
      True, "detect")
 
 gate("gate / an explicit clearance publishes",
-     _rr.is_held({"record_id": "X", "publication": {"status": "CLEARED"}}),
+     lambda: _rr.is_held({"record_id": "X", "publication": {"status": "CLEARED"}}),
      False, "quiet")
 
 gate("gate / a four letter package name is visible to the guard",
-     "ccxt" in _rr.subject_strings({"subject": {"package": "ccxt"}}),
+     lambda: "ccxt" in _rr.subject_strings({"subject": {"package": "ccxt"}}),
      True, "detect")
 
 gate("gate / a claimed subject is guarded alongside the resolved one",
-     "claimed-name" in _rr.subject_strings(
+     lambda: "claimed-name" in _rr.subject_strings(
          {"subject": {"package": "resolved-name"},
           "subject_as_claimed": {"package": "claimed-name"}}),
      True, "detect")
 
 gate("gate / a page naming a short held subject is refused",
-     _rr.identifies("<p>1 record withheld.</p><p>ccxt</p>",
+     lambda: _rr.identifies("<p>1 record withheld.</p><p>ccxt</p>",
                     [("f", {"subject": {"package": "ccxt"}})]) == ["ccxt"],
      True, "detect")
 
 gate("gate / an escaped subject name is still found in the page",
-     _rr.identifies("<p>withheld</p><p>%s</p>" % _rr.esc("acme&co-mcp"),
+     lambda: _rr.identifies("<p>withheld</p><p>%s</p>" % _rr.esc("acme&co-mcp"),
                     [("f", {"subject": {"package": "acme&co-mcp"}})]) == ["acme&co-mcp"],
      True, "detect")
 
 gate("gate / a name inside a longer word is not a match",
-     _rr.identifies("<p>metadata about the ccxtras project</p>",
+     lambda: _rr.identifies("<p>metadata about the ccxtras project</p>",
                     [("f", {"subject": {"package": "ccxt"}})]) == [],
      True, "quiet")
 
 gate("gate / a page naming nobody is not refused",
-     _rr.identifies("<p>0 records published, 1 held.</p>",
+     lambda: _rr.identifies("<p>0 records published, 1 held.</p>",
                     [("f", {"subject": {"package": "yfinance"}})]) == [],
+     True, "quiet")
+
+# The count of held records is compiled from files that are deliberately not
+# in version control, so a clone has the manifest and none of the records. The
+# renderer used to build there anyway and write "0 issued and held" over a
+# page committing to three, and the README called that diff expected. An
+# absent record is not a record that stopped existing.
+gate("gate / a checkout missing a committed held record refuses to build",
+     lambda: _rr.missing_held({"NBLX-00000000-001", "NBLX-00000000-002"},
+                      {"NBLX-00000000-001"}) == {"NBLX-00000000-002"},
+     True, "detect")
+
+gate("gate / a clone holding none of the committed records refuses to build",
+     lambda: _rr.missing_held({"NBLX-00000000-001"}, set()) == {"NBLX-00000000-001"},
+     True, "detect")
+
+gate("gate / a complete checkout builds",
+     lambda: _rr.missing_held({"NBLX-00000000-001", "NBLX-00000000-002"},
+                      {"NBLX-00000000-001", "NBLX-00000000-002"}) == set(),
+     True, "quiet")
+
+# A held record the manifest does not yet list is the state between issuing a
+# record and running hold.py --commit. It is a real disagreement and hold.py
+# --verify is what reports it; blocking the build on it here would make the
+# renderer refuse in the middle of the normal issuing sequence.
+gate("gate / a record not yet committed to does not block the build",
+     lambda: _rr.missing_held({"NBLX-00000000-001"},
+                      {"NBLX-00000000-001", "NBLX-00000000-002"}) == set(),
+     True, "quiet")
+
+gate("gate / no manifest at all is not treated as a commitment to nothing",
+     lambda: _rr.missing_held(None, set()) == set(),
      True, "quiet")
 
 # ======================= 10d. the export guard, on a throwaway repository
@@ -701,23 +745,23 @@ def _export_rc(**kw):
         _sh.rmtree(root, ignore_errors=True)
 
 gate("export / an empty export carrying only the manifest is clean",
-     _export_rc(), 0, "quiet")
+     lambda: _export_rc(), 0, "quiet")
 
 gate("export / a record the register published is not a stray",
-     _export_rc(records=[("NBLX-20260910-004.json", "NBLX-20260910-004")],
+     lambda: _export_rc(records=[("NBLX-20260910-004.json", "NBLX-20260910-004")],
                 page_ids=["NBLX-20260910-004"]),
      0, "quiet")
 
 gate("export / a record file the register never published is refused",
-     _export_rc(records=[("NBLX-20260910-005.json", "NBLX-20260910-005")]),
+     lambda: _export_rc(records=[("NBLX-20260910-005.json", "NBLX-20260910-005")]),
      2, "detect")
 
 gate("export / a held record under a name the manifest does not list is refused",
-     _export_rc(held=["NBLX-00000000-000.json.bak"]),
+     lambda: _export_rc(held=["NBLX-00000000-000.json.bak"]),
      2, "detect")
 
 gate("export / a held record under its manifest name is refused",
-     _export_rc(held=["NBLX-00000000-000.json"]),
+     lambda: _export_rc(held=["NBLX-00000000-000.json"]),
      2, "detect")
 
 # ================= 10e. the subject tuple names the subject, not the folder
@@ -737,24 +781,24 @@ _pkg = getattr(_run, "package_name", lambda *_a: None)
 _repo = getattr(_run, "repo_from_origin", lambda *_a: object())
 
 gate("subject / a tmp clone is still named by its origin",
-     _pkg("/somewhere/tmp",
+     lambda: _pkg("/somewhere/tmp",
                        "https://github.com/acme/acme-mcp.git") == "acme-mcp",
      True, "detect")
 
 gate("subject / an ssh remote parses the same as an https one",
-     _repo("git@github.com:acme/acme-mcp.git") == "acme-mcp",
+     lambda: _repo("git@github.com:acme/acme-mcp.git") == "acme-mcp",
      True, "detect")
 
 gate("subject / a remote with no .git suffix still parses",
-     _repo("https://github.com/acme/acme-mcp") == "acme-mcp",
+     lambda: _repo("https://github.com/acme/acme-mcp") == "acme-mcp",
      True, "detect")
 
 gate("subject / no remote falls back to the directory name",
-     _pkg("/somewhere/acme-mcp", None) == "acme-mcp",
+     lambda: _pkg("/somewhere/acme-mcp", None) == "acme-mcp",
      True, "quiet")
 
 gate("subject / a string that is not a remote is not treated as one",
-     _repo("not a url") is None,
+     lambda: _repo("not a url") is None,
      True, "quiet")
 
 # ==================== 10f. fidelity payloads that used to be called clean
@@ -828,27 +872,27 @@ def _a1_with(payload):
 _delisted = _a1_with({"chart": {"result": None, "error": {
     "code": "Not Found", "description": "No data found, symbol may be delisted"}}})
 gate("authority / a delisted symbol is reported in the upstream's own words",
-     bool(_delisted) and "delisted" in (_delisted.get("reason") or "")
+     lambda: bool(_delisted) and "delisted" in (_delisted.get("reason") or "")
      and not _delisted.get("unstructured"),
      True, "detect")
 
 _nots = _a1_with({"chart": {"result": [{"meta": {}, "indicators": {"quote": [{}]}}]}})
 gate("authority / a result with no timestamps is a stated answer, not a crash",
-     bool(_nots) and not _nots.get("unstructured"),
+     lambda: bool(_nots) and not _nots.get("unstructured"),
      True, "detect")
 
 _ragged = _a1_with({"chart": {"result": [{"meta": {"gmtoffset": 0},
     "timestamp": [1, 2, 3],
     "indicators": {"quote": [{"open": [1], "high": [1], "low": [1], "close": [1]}]}}]}})
 gate("authority / a ragged read is refused rather than truncated",
-     bool(_ragged) and not _ragged.get("unstructured"),
+     lambda: bool(_ragged) and not _ragged.get("unstructured"),
      True, "detect")
 
 _ok = _a1_with({"chart": {"result": [{"meta": {"symbol": "AAPL", "gmtoffset": -14400},
     "timestamp": [1750000000],
     "indicators": {"quote": [{"open": [1.0], "high": [2.0], "low": [0.5], "close": [1.5]}]}}]}})
 gate("authority / a well-formed response still reads clean",
-     _ok is None, True, "quiet")
+     lambda: _ok is None, True, "quiet")
 
 # ======================================================== 11. aggregation
 _agg = [

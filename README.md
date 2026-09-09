@@ -235,9 +235,11 @@ The hash will change whenever the register legitimately changes, which today mea
 python3 suite/render_register.py
 ```
 
-On a clone this overwrites `brand/register.html` with a page carrying no records at all, because the records are not in the clone: the published ones do not exist yet and the held ones are not in version control. That diff is the expected result, not a failure. Restore the committed copy with `git checkout brand/register.html` before comparing hashes again.
+On a clone this refuses and writes nothing. The held records are not in version control and the held count on the page is compiled from them, so building here would replace a page stating that three records are held with one stating that none are, which reads as findings having been quietly dropped. The refusal names the records the manifest commits to and could not read. Rebuilding is meaningful where the records live; the hash comparison above needs no rebuild, which is why it is the check a stranger can run.
 
-The generator refuses at build time to write a page carrying a held record's identifier, a held subject's name, or a verdict token in the embargo block. Those refusals are in `suite/render_register.py` where the conditions can be read rather than taken on trust.
+That refusal is recent. Until it existed the generator built happily in a clone and overwrote the page with a zero count, and the README called that diff expected and told you to `git checkout` it back. It is the same defect this suite exists to find in other people's tools, in this one: an input that could not be read, counted as agreement.
+
+The generator refuses at build time to write a page carrying a held record's identifier, a held subject's name, or a verdict token in the embargo block, and refuses to build at all from a checkout that cannot read every held record the manifest commits to. Those refusals are in `suite/render_register.py` where the conditions can be read rather than taken on trust.
 
 ---
 
