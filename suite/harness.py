@@ -467,21 +467,45 @@ def classify_window_span(text, is_error, parsed, requested_days, arg_desc,
     if not parsed:
         return (FAIL_UNSAFE, "silent_empty",
                 f"accepted {arg_desc} and returned an empty array with no signal")
+    if not isinstance(requested_days, (int, float)) or requested_days <= 0:
+        # ratio divides by this. A zero-length request is not a window anyone
+        # can be short of, and it used to raise ZeroDivisionError out of the
+        # classifier, which run.py's boundary turns into a failed run that
+        # loses every other probe's result along with it.
+        return (INDETERMINATE, None,
+                f"requested_days is {requested_days!r}, which is not a window "
+                f"a subject can serve less of; no span claim is issued")
     # The subject's own field name, matching classify_monotonic. Reading a key
     # the payload does not have would measure nothing and quietly return PASS,
     # which is the vacuous-verdict defect this probe exists to avoid.
-    dates = sorted(str(b.get("Date", ""))[:10] for b in parsed
-                   if isinstance(b, dict) and b.get("Date"))
+    dated = [str(b.get("Date", ""))[:10] for b in parsed
+             if isinstance(b, dict) and b.get("Date")]
+    dates = sorted(dated)
     if len(dates) < 2:
         return (INDETERMINATE, None,
                 "fewer than two dated records, so the served span cannot be "
                 "measured and no claim is issued in either direction")
+    # strptime below is %Y-%m-%d and nothing checked that first, so a payload
+    # dating its bars any other way raised ValueError out of the classifier.
+    # classify_monotonic already refuses non-ISO dates rather than ordering
+    # them wrongly; this refuses them rather than crashing on them.
+    bad = [d for d in dates if not ISO_DATE.match(d)]
+    if bad:
+        return (INDETERMINATE, None,
+                f"{len(bad)} of {len(dates)} dates are not ISO 8601 "
+                f"(first: {bad[0]!r}), so the served span cannot be measured")
     served = (datetime.strptime(dates[-1], "%Y-%m-%d")
               - datetime.strptime(dates[0], "%Y-%m-%d")).days
     ratio = served / float(requested_days)
+    # len(dated), not len(parsed). The span is measured from the dated records
+    # only, and citing the total made the evidence claim a wider basis than the
+    # measurement had: nine dated bars and three undated ones read as "across
+    # 12 records".
+    undated = len(parsed) - len(dated)
     ev = (f"requested {arg_desc} ({requested_days} days), served {served} days "
-          f"across {len(parsed)} records, {dates[0]} to {dates[-1]}, "
-          f"{ratio:.1%} of the request")
+          f"across {len(dated)} dated records"
+          + (f" ({undated} undated records ignored)" if undated else "")
+          + f", {dates[0]} to {dates[-1]}, {ratio:.1%} of the request")
 
     if ratio >= 1.0 - tol_frac:
         return PASS, None, f"the requested window was served in full: {ev}"

@@ -39,6 +39,21 @@ NOW = datetime(2026, 8, 3, 18, 0, 0, tzinfo=timezone.utc)
 
 _results = []
 
+def safe(fn, *a, **kw):
+    """Call a classifier and turn a raised exception into a reportable result.
+
+    A classifier that raises used to take this whole file down with it, so the
+    suite reported a traceback instead of a red case and every check after the
+    crash went unrun. That is the same shape as the defects being tested for: a
+    failure that destroys the report rather than appearing in it. Two
+    classify_window_span inputs raised, which is how this was noticed.
+    """
+    try:
+        return fn(*a, **kw)
+    except Exception as e:
+        return ("RAISED:%s" % type(e).__name__, str(e)[:80], "classifier raised")
+
+
 def check(name, got, want_outcome, want_cause, kind):
     """kind is 'detect' (planted failure must be caught) or 'quiet' (clean
     input must not trip the detector)."""
@@ -652,6 +667,29 @@ check("fidelity / dropping unreadable closes must not improve the overlap",
 
 check("fidelity / a fully readable matching payload still passes",
       classify_fidelity(_fsub, auth_bars([(d, 100.0) for d in _fdays]), TOL),
+      PASS, None, "quiet")
+
+# ============== 10g. window_span inputs that crashed or overstated
+# Two of these raised out of the classifier. A classifier that raises does not
+# just lose its own verdict: run.py's boundary turns the whole run into a
+# failed one and every other probe's result goes with it.
+
+_wsiso = json.dumps([{"Date": "2026-%02d-01" % m, "Close": 1} for m in range(1, 10)])
+_wsp, _ = parse_bars(_wsiso)
+
+_wsbad = json.dumps([{"Date": "01/05/2026", "Close": 1},
+                     {"Date": "12/31/2026", "Close": 1}])
+_wsbadp, _ = parse_bars(_wsbad)
+check("window_span / non-ISO dates are refused, not fed to strptime",
+      safe(classify_window_span, _wsbad, False, _wsbadp, 365, "period='1y'"),
+      INDETERMINATE, None, "quiet")
+
+check("window_span / a zero-length request is not a window to fall short of",
+      safe(classify_window_span, _wsiso, False, _wsp, 0, "period='0d'"),
+      INDETERMINATE, None, "quiet")
+
+check("window_span / a real request over ISO dates still passes",
+      classify_window_span(_wsiso, False, _wsp, 200, "period='1y'"),
       PASS, None, "quiet")
 
 # ======================================================== 11. aggregation
