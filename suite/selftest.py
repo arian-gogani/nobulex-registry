@@ -1075,6 +1075,58 @@ gate("message / nothing held means nothing to look for",
      lambda: _hold.message_leaks(set()) == {},
      True, "quiet")
 
+# ============ 10g. why P04 through P08 have nothing to read
+#
+# Those five probes all grade one shared live response. When it was unusable
+# the runner swallowed the failure whole -- `except Exception: pass`, the
+# isError flag dropped, parse_bars' own note discarded -- and each probe
+# reported "no bars", which says the subject returned nothing. It may have
+# refused, or the call may have raised inside the harness, which is not a fact
+# about the subject at all. The runner already gets this right for authority
+# A1 through a1_missing(); these assert it for the subject.
+
+import run as _run
+
+def _note(**kw):
+    kw.setdefault("text", None)
+    kw.setdefault("is_error", False)
+    kw.setdefault("bars", [{"Open": 1}])
+    kw.setdefault("parse_note", None)
+    return _run.live_pull_note(kw["text"], kw["is_error"], kw["bars"],
+                               kw["parse_note"], kw.get("raised"))
+
+gate("live / a readable record array leaves the five probes to their work",
+     lambda: _note() is None, True, "quiet")
+
+gate("live / a call that raised is reported as a fact about the run",
+     lambda: "raised inside the harness" in (_note(raised="TimeoutError: x") or ""),
+     True, "detect")
+
+gate("live / a call that raised does not read as the subject returning nothing",
+     lambda: "not about the subject" in (_note(raised="TimeoutError: x") or ""),
+     True, "detect")
+
+gate("live / a protocol refusal is named as a refusal",
+     lambda: "refused" in (_note(is_error=True, bars=None) or ""),
+     True, "detect")
+
+gate("live / a payload that is not a record array says which",
+     lambda: "payload is not JSON" in (
+         _note(bars=None, parse_note="payload is not JSON") or ""),
+     True, "detect")
+
+gate("live / an empty record array is distinguished from an unreadable one",
+     lambda: (_note(bars=[]) or "") != (_note(bars=None) or "")
+     and "empty record array" in (_note(bars=[]) or ""),
+     True, "detect")
+
+# Order matters: a refusal that also failed to parse is a refusal first,
+# because that is the fact about the subject.
+gate("live / a refusal that also fails to parse reads as the refusal",
+     lambda: "refused" in (
+         _note(is_error=True, bars=None, parse_note="payload is not JSON") or ""),
+     True, "detect")
+
 # ================= 10e. the subject tuple names the subject, not the folder
 # run.py used os.path.basename(subject_dir) as the package name. That is the
 # operator's choice of clone path, so the same commit cloned into ~/tmp

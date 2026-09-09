@@ -172,6 +172,38 @@ def next_record_id(out_dir, day):
     return next_in_sequence(names, day)
 
 
+def live_pull_note(text, is_error, bars, parse_note, raised=None):
+    """Why the shared live response cannot be read, or None if it can.
+
+    P04 through P08 all read one response. When that response was unusable
+    each of them reported "no bars", which is a statement that the subject
+    returned nothing. It could equally have been the subject refusing through
+    the protocol error channel, the call raising inside the harness, or a
+    payload that is JSON but not the documented record array. Those are
+    different facts about different parties, and one of them is not about the
+    subject at all. Collapsing them into two words is the same defect this
+    suite grades other people for, and the same one this file already avoids
+    on the authority side through a1_missing().
+
+    Pure, and takes the pieces rather than the client, so the selftest can
+    drive every branch without a subject.
+    """
+    if raised is not None:
+        return ("the shared live request raised inside the harness: %s. That "
+                "is a fact about this run, not about the subject" % raised)
+    if is_error:
+        return ("the subject refused the shared live request through the "
+                "protocol error channel")
+    if parse_note:
+        return ("the shared live request returned a payload that is not the "
+                "documented record array: %s" % parse_note)
+    if not isinstance(bars, list):
+        return "the shared live request returned no readable record array"
+    if not bars:
+        return "the shared live request returned an empty record array"
+    return None
+
+
 class Run:
     def __init__(self):
         self.probes = []
@@ -500,27 +532,51 @@ def main():
                 {"tool": hist, "period": "1mo "})
 
         # live pull, reused by P04 through P08 ------------------------------
-        live_text, live_bars = None, None
+        # The failure used to be swallowed whole: `except Exception: pass`,
+        # the isError flag dropped on the floor, and parse_bars' own note
+        # discarded. Five probes then reported "no bars" over a response that
+        # may never have been read at all.
+        live_text, live_bars, live_note = None, None, None
         try:
-            live_text, _le, _ = client.call(
+            live_text, live_err, _ = client.call(
                 hist, {"ticker": LIVE_TICKER, "period": "1mo",
                        "interval": "1d"})
-            live_bars, _ = parse_bars(live_text)
-        except Exception:
-            pass
+            live_bars, parse_note = parse_bars(live_text)
+            live_note = live_pull_note(live_text, live_err, live_bars,
+                                       parse_note)
+        except Exception as exc:
+            live_note = live_pull_note(
+                None, False, None, None,
+                raised="%s: %s" % (type(exc).__name__, str(exc)[:160]))
+        if live_note:
+            live_bars = None
+
+        def live_missing():
+            """Why P04 through P08 have nothing to read, in terms a reader can
+            check, rather than in the two words 'no bars'."""
+            return (INDETERMINATE, None,
+                    live_note + ". P04 through P08 all read that one response, "
+                    "so none of them observed the subject's data and none "
+                    "issues a claim about it in either direction.", live_text)
 
         def p04():
+            if live_note:
+                return live_missing()
             o, c, d = classify_ohlc(live_bars)
             return o, c, d, live_text
         r.guard("P04", "OHLC internal consistency", p04,
                 {"tool": hist, "ticker": LIVE_TICKER, "period": "1mo"})
 
         def p05():
+            if live_note:
+                return live_missing()
             o, c, d = classify_monotonic(live_bars)
             return o, c, d, None
         r.guard("P05", "session dates strictly increasing", p05)
 
         def p06():
+            if live_note:
+                return live_missing()
             o, c, d = classify_freshness(
                 live_bars, datetime.now(timezone.utc),
                 CONFIG["freshness_max_calendar_days"])
@@ -543,6 +599,8 @@ def main():
                       "was made from, not evidence about the subject.", None)
 
         def p07():
+            if live_note:
+                return live_missing()
             if not a1:
                 return a1_missing()
             o, c, d = classify_fidelity(live_bars, a1["bars"],
@@ -551,6 +609,8 @@ def main():
         r.guard("P07", "transport fidelity against authority A1", p07)
 
         def p08():
+            if live_note:
+                return live_missing()
             if not a1:
                 return a1_missing()
             o, c, d = classify_truncation(live_bars, a1["bars"])
