@@ -692,6 +692,52 @@ check("window_span / a real request over ISO dates still passes",
       classify_window_span(_wsiso, False, _wsp, 200, "period='1y'"),
       PASS, None, "quiet")
 
+# ============ 10h. the authority reader, on its upstream's ordinary answers
+# These three used to raise TypeError, KeyError and IndexError. run.py catches
+# broadly so the run survived, but the record then said the authority was
+# unreachable, with a Python type name where the upstream's own message
+# belonged. The authority was reached and did answer.
+
+import harness as _h
+
+def _a1_with(payload):
+    real = _h._get_json
+    _h._get_json = lambda *a, **k: payload
+    try:
+        _h.a1_chart("AAPL")
+        return None
+    except _h.AuthorityUnavailable as e:
+        return e.as_dict()
+    except Exception as e:
+        return {"reason": "%s: %s" % (type(e).__name__, e), "unstructured": True}
+    finally:
+        _h._get_json = real
+
+_delisted = _a1_with({"chart": {"result": None, "error": {
+    "code": "Not Found", "description": "No data found, symbol may be delisted"}}})
+gate("authority / a delisted symbol is reported in the upstream's own words",
+     bool(_delisted) and "delisted" in (_delisted.get("reason") or "")
+     and not _delisted.get("unstructured"),
+     True, "detect")
+
+_nots = _a1_with({"chart": {"result": [{"meta": {}, "indicators": {"quote": [{}]}}]}})
+gate("authority / a result with no timestamps is a stated answer, not a crash",
+     bool(_nots) and not _nots.get("unstructured"),
+     True, "detect")
+
+_ragged = _a1_with({"chart": {"result": [{"meta": {"gmtoffset": 0},
+    "timestamp": [1, 2, 3],
+    "indicators": {"quote": [{"open": [1], "high": [1], "low": [1], "close": [1]}]}}]}})
+gate("authority / a ragged read is refused rather than truncated",
+     bool(_ragged) and not _ragged.get("unstructured"),
+     True, "detect")
+
+_ok = _a1_with({"chart": {"result": [{"meta": {"symbol": "AAPL", "gmtoffset": -14400},
+    "timestamp": [1750000000],
+    "indicators": {"quote": [{"open": [1.0], "high": [2.0], "low": [0.5], "close": [1.5]}]}}]}})
+gate("authority / a well-formed response still reads clean",
+     _ok is None, True, "quiet")
+
 # ======================================================== 11. aggregation
 _agg = [
     ([PASS, PASS, PASS], PASS),

@@ -305,9 +305,39 @@ def a1_chart(ticker, rng="5d", interval="1d"):
     url = (f"{CONFIG['authorities']['A1']['endpoint']}{ticker}"
            f"?range={rng}&interval={interval}")
     d = _get_json(url)
-    res = d["chart"]["result"][0]
+    # The three shapes below are ordinary answers from this endpoint, not
+    # corrupt ones, and each used to raise a bare TypeError, KeyError or
+    # IndexError out of here. run.py catches broadly so the run survived, but
+    # what it then wrote into the record was reachable: false with a reason of
+    # "TypeError: 'NoneType' object is not subscriptable". The authority was
+    # reached and did answer; it answered that the symbol has no data. A record
+    # that calls that unreachable states something untrue about a third party's
+    # service, and the reason field names a Python type instead of what the
+    # upstream said. AuthorityUnavailable carries the upstream's own words.
+    chart = d.get("chart") if isinstance(d, dict) else None
+    if not isinstance(chart, dict):
+        raise AuthorityUnavailable(url, status=200,
+                                   reason="response has no chart object")
+    results = chart.get("result")
+    if not results:
+        err = chart.get("error") or {}
+        detail = err.get("description") or err.get("code") or "no result and no error given"
+        raise AuthorityUnavailable(url, status=200,
+                                   reason=f"authority answered with no result: {detail}",
+                                   body_excerpt=str(err)[:200])
+    res = results[0]
     meta = res.get("meta", {})
-    q = res["indicators"]["quote"][0]
+    if "timestamp" not in res:
+        raise AuthorityUnavailable(url, status=200,
+                                   reason="authority returned a result with no "
+                                          "timestamp array, so there are no "
+                                          "sessions in this window")
+    try:
+        q = res["indicators"]["quote"][0]
+    except (KeyError, IndexError, TypeError):
+        raise AuthorityUnavailable(url, status=200,
+                                   reason="authority returned timestamps with "
+                                          "no matching quote block")
 
     tzname = meta.get("exchangeTimezoneName")
     tz, tz_basis = None, None
@@ -323,8 +353,22 @@ def a1_chart(ticker, rng="5d", interval="1d"):
     if tz is None:
         tz, tz_basis = timezone.utc, "UTC fallback, exchange timezone unstated"
 
+    stamps = res["timestamp"]
+    # Ragged arrays used to raise IndexError on the first short one. Taking the
+    # shortest common length instead would silently drop sessions, so this
+    # refuses: a partial read of the authority is not something to compare a
+    # subject against, and it is exactly the "empty comparison is not a clean
+    # bill of health" rule applied to the other side of the comparison.
+    for k in ("open", "high", "low", "close"):
+        col = q.get(k)
+        if not isinstance(col, list) or len(col) != len(stamps):
+            raise AuthorityUnavailable(
+                url, status=200,
+                reason=f"authority returned {len(stamps)} timestamps but "
+                       f"{len(col) if isinstance(col, list) else 'no'} {k} "
+                       f"values; a ragged read cannot be compared against")
     bars = []
-    for i, ts in enumerate(res["timestamp"]):
+    for i, ts in enumerate(stamps):
         bars.append({"ts": ts,
                      "date": datetime.fromtimestamp(ts, tz).strftime("%Y-%m-%d"),
                      "open": q["open"][i], "high": q["high"][i],
