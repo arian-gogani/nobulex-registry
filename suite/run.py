@@ -16,7 +16,7 @@ traceback attached to the record. Nothing in here can produce a PASS by
 falling through.
 """
 
-import argparse, hashlib, json, os, platform, subprocess, sys, traceback
+import argparse, hashlib, json, os, platform, re, subprocess, sys, traceback
 from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -119,6 +119,40 @@ def git(subject_dir, *args):
                               timeout=20).stdout.strip()
     except Exception:
         return ""
+
+
+ORIGIN_REPO = re.compile(r"[/:]([^/:]+?)(?:\.git)?/?$")
+
+
+def repo_from_origin(origin):
+    """The repository name in a git remote URL, or None if there isn't one."""
+    if not isinstance(origin, str) or not origin.strip():
+        return None
+    m = ORIGIN_REPO.search(origin.strip())
+    if not m:
+        return None
+    name = m.group(1).strip()
+    return name or None
+
+
+def package_name(subject_dir, origin):
+    """What to call the subject in its own record.
+
+    This was os.path.basename(subject_dir), which is not the subject's identity
+    and is not read from the environment either. It is whatever the operator
+    named the folder. Clone the same commit into ~/tmp and the record says the
+    package is "tmp", and the renderer's held-subject guard then searches for
+    "tmp" while the page is free to print the real name. The origin catches
+    that case, so it was never a leak, but the record named the wrong thing and
+    the record is the evidence.
+
+    The remote URL is read off the clone by git, so it is environment-derived
+    in the way the directory name only appears to be, and a stranger can check
+    it against the repository. Falls back to the directory name when there is
+    no remote, and the record says which of the two it used rather than leaving
+    a reader to guess.
+    """
+    return repo_from_origin(origin) or os.path.basename(subject_dir)
 
 
 def next_record_id(out_dir, day):
@@ -264,8 +298,10 @@ def main():
     print(f"started   {started.isoformat()}\n")
 
     if dirty:
-        print("  refusing to issue a verdict: the working tree is modified, so "
-              "the commit SHA does not describe what actually ran.\n")
+        print("  the working tree is modified, so the commit SHA does not "
+              "describe what actually ran. The verdict for this run is forced "
+              "to INDETERMINATE and the record will carry "
+              "working_tree_clean: false.\n")
 
     r = Run()
 
@@ -570,7 +606,8 @@ def main():
         "verdict": verdict,
         "loss_causes": causes,
         "subject": {
-            "package": os.path.basename(subject_dir),
+            "package": package_name(subject_dir, origin),
+            "package_source": "origin" if repo_from_origin(origin) else "directory",
             "commit": commit or None,
             "commit_date": commit_date or None,
             "origin": origin or None,

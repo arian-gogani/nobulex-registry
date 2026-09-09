@@ -593,6 +593,43 @@ gate("export / a held record under its manifest name is refused",
      _export_rc(held=["NBLX-00000000-000.json"]),
      2, "detect")
 
+# ================= 10e. the subject tuple names the subject, not the folder
+# run.py used os.path.basename(subject_dir) as the package name. That is the
+# operator's choice of clone path, so the same commit cloned into ~/tmp
+# produced a record whose package was "tmp", and the renderer's held-subject
+# guard then had "tmp" to search for. The origin covered that case, so it was
+# never a leak; the record simply named the wrong thing, and the record is the
+# evidence.
+
+import run as _run
+
+# Reached through getattr so that a build without these functions reports five
+# failed cases instead of taking the whole suite down with an AttributeError.
+# A self-test that crashes tells you less than one that goes red.
+_pkg = getattr(_run, "package_name", lambda *_a: None)
+_repo = getattr(_run, "repo_from_origin", lambda *_a: object())
+
+gate("subject / a tmp clone is still named by its origin",
+     _pkg("/somewhere/tmp",
+                       "https://github.com/acme/acme-mcp.git") == "acme-mcp",
+     True, "detect")
+
+gate("subject / an ssh remote parses the same as an https one",
+     _repo("git@github.com:acme/acme-mcp.git") == "acme-mcp",
+     True, "detect")
+
+gate("subject / a remote with no .git suffix still parses",
+     _repo("https://github.com/acme/acme-mcp") == "acme-mcp",
+     True, "detect")
+
+gate("subject / no remote falls back to the directory name",
+     _pkg("/somewhere/acme-mcp", None) == "acme-mcp",
+     True, "quiet")
+
+gate("subject / a string that is not a remote is not treated as one",
+     _repo("not a url") is None,
+     True, "quiet")
+
 # ======================================================== 11. aggregation
 _agg = [
     ([PASS, PASS, PASS], PASS),
