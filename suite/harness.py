@@ -46,7 +46,17 @@ def aggregate(outcomes):
 # takes a list rather than a directory, so that the arithmetic can be tested
 # without a filesystem. It is a correctness claim, and an untested correctness
 # claim is a preference.
-_ID = re.compile(r"^NBLX-\d{8}-(\d{3})\b")
+# \d{3,} rather than \d{3}, and (?![0-9]) rather than \b, and case-insensitive.
+# Each of those was a way for a record on disk to be invisible to the count,
+# and an invisible record hands its number out a second time:
+#
+#   NBLX-...-0042.json        four digits, \d{3} could not match it
+#   nblx-...-011.json         lower case, the pattern was case-sensitive
+#   NBLX-...-013_draft.json   \b treats _ as a word character, so no boundary
+#
+# All three returned 001 as the next id with a record already on disk.
+_ID = re.compile(r"^\s*NBLX-\d{8}-(\d{3,})(?![0-9])", re.I)
+_DAY = re.compile(r"^\d{8}$")
 
 def next_in_sequence(names, day):
     """One past the highest number in `names`, stamped with `day`.
@@ -54,10 +64,28 @@ def next_in_sequence(names, day):
     Counts held and withdrawn records alongside published ones, because a
     withdrawn record still spent its number, and reissuing it would point two
     different records at one identity. An empty list yields 001.
+
+    Past 999 the width grows rather than the number stalling. The old format
+    was a fixed :03d, so 1000 rendered as "1000" while the pattern could only
+    match three digits, which meant every record after the thousandth was
+    invisible to the count and every one of them was issued NBLX-<day>-1000.
+    Four consecutive calls returned the same identity.
+
+    `day` is validated because it is interpolated straight into the id. Passing
+    an ISO date rather than YYYYMMDD produced NBLX-2026-09-10-002, which this
+    pattern can never re-match, so that number was reissued on every later
+    call. run.py always passes the right shape, so this was latent, and a
+    latent way to mint duplicate identities is still a way to mint them.
     """
+    if not _DAY.match(str(day)):
+        raise ValueError(
+            f"day must be YYYYMMDD, got {day!r}. It is interpolated into the "
+            f"record id, and an id this function cannot re-match is a number "
+            f"that will be handed out again")
     seen = [0] + [int(m.group(1))
                   for m in (_ID.match(n) for n in names) if m]
-    return f"NBLX-{day}-{max(seen) + 1:03d}"
+    nxt = max(seen) + 1
+    return f"NBLX-{day}-{nxt:0{max(3, len(str(nxt)))}d}"
 
 # ------------------------------------------------- pinned before execution
 CONFIG = {
@@ -381,6 +409,36 @@ def a1_chart(ticker, rng="5d", interval="1d"):
                                    reason="authority returned timestamps with "
                                           "no matching quote block")
 
+    # The symbol the upstream answered about, compared to the one asked for.
+    # It was recorded and never checked, so a substitute serve became the
+    # ground truth every fidelity and truncation verdict is measured against.
+    #
+    # Verified: asked for AAPL, upstream answered meta.symbol MSFT with MSFT's
+    # closes, and a CORRECT AAPL tool was graded FAIL_UNSAFE stale_value with
+    # "deviates 45.3883% from the same upstream read directly". That sentence
+    # is published about a named third party, and the deviation is between two
+    # different companies rather than between the tool and the truth.
+    #
+    # An alias or a rename is a real thing, and this refuses those too rather
+    # than guessing which it is. The authority declining to answer is a fact
+    # about the authority; substituting silently is a fact about nobody.
+    echoed = meta.get("symbol")
+    if isinstance(echoed, str) and echoed.strip().upper() != ticker.strip().upper():
+        raise AuthorityUnavailable(
+            url, status=200,
+            reason=f"asked for {ticker!r} and the upstream answered for "
+                   f"{echoed!r}. A response about a different security is not "
+                   f"a ground truth for this one, whether it is a substitution "
+                   f"or an alias")
+
+    # An error block beside a result is the upstream saying its own answer is
+    # degraded. Reading the result anyway makes that answer authoritative.
+    if chart.get("error"):
+        raise AuthorityUnavailable(
+            url, status=200,
+            reason=f"upstream returned a result and flagged it: "
+                   f"{str(chart['error'])[:160]}")
+
     tzname = meta.get("exchangeTimezoneName")
     tz, tz_basis = None, None
     if tzname:
@@ -494,6 +552,22 @@ def classify_absent_entity(text, is_error, parsed):
     Loud refusal is the correct behavior. An empty array is not."""
     if is_error:
         return PASS, None, "refused through the protocol error channel"
+    # The prose check runs BEFORE the parsed-list check, which is the order
+    # both sibling classifiers already use and this one did not.
+    #
+    # parse_bars accepts any JSON list as the record array, so a subject that
+    # answers [{"error": "No data found for ZZZZ, symbol may be delisted"}] has
+    # its refusal counted as one record. Reading the list first turned that
+    # into FAIL_UNSAFE fabricated_field, "returned 1 records for an entity that
+    # does not exist", published about a tool that had just said in plain words
+    # that the entity does not exist. Wrong tier and wrong cause: it disclosed
+    # the failure, it only failed to set isError.
+    if text and re.search(r"not found|error|invalid|no data|unknown",
+                          text, re.I):
+        return (FAIL_SAFE, "unsignaled_fallback",
+                "said 'not found' in prose on the success channel. The failure "
+                "is legible to a human reader but carries no isError flag, so a "
+                "programmatic caller must string-match to detect it.")
     if parsed is not None and isinstance(parsed, list):
         if len(parsed) == 0:
             return (FAIL_UNSAFE, "silent_empty",
@@ -501,12 +575,6 @@ def classify_absent_entity(text, is_error, parsed):
                     "caller cannot distinguish this from a stock with no trades.")
         return (FAIL_UNSAFE, "fabricated_field",
                 f"returned {len(parsed)} records for an entity that does not exist")
-    if text and re.search(r"not found|error|invalid|no data|unknown",
-                          text, re.I):
-        return (FAIL_SAFE, "unsignaled_fallback",
-                "said 'not found' in prose on the success channel. The failure "
-                "is legible to a human reader but carries no isError flag, so a "
-                "programmatic caller must string-match to detect it.")
     return INDETERMINATE, None, "response neither an error nor a parseable payload"
 
 def classify_empty_window(text, is_error, parsed):
@@ -1054,9 +1122,20 @@ def classify_freshness(bars, now_utc, max_days, max_future_days=None):
     so it is fabricated_field rather than stale_value."""
     if not bars:
         return INDETERMINATE, None, "no bars"
-    ds = sorted(str(b.get("Date", ""))[:10] for b in bars if b.get("Date"))
+    # isinstance, which every other dated reader in this file already has and
+    # this one did not. parse_bars accepts any JSON list as the record array,
+    # so [1, 2, 3] arrives as three bars and `b.get` raised AttributeError out
+    # of the classifier. run.py's boundary turns that into INDETERMINATE, so
+    # nothing was misgraded, but the published evidence became a traceback
+    # instead of a sentence naming what the subject sent.
+    unreadable = sum(1 for b in bars if not isinstance(b, dict))
+    ds = sorted(str(b.get("Date", ""))[:10]
+                for b in bars if isinstance(b, dict) and b.get("Date"))
     if not ds:
-        return INDETERMINATE, None, "no parseable dates"
+        return (INDETERMINATE, None,
+                f"no parseable dates"
+                + (f"; {unreadable} of {len(bars)} entries were not records"
+                   if unreadable else ""))
     # The same rule classify_monotonic already states: a string sort is
     # chronological for ISO 8601 and for nothing else. This probe took the
     # last element of a lexical sort and called it the most recent bar, and
@@ -1173,12 +1252,32 @@ def classify_channel(noise, stderr_text):
                 "and a lenient one silently discards data it cannot frame.")
     return PASS, None, "no non-JSON emitted on the JSON-RPC channel"
 
-def _iso_dates(bars):
+def _iso_dates(bars, authority=False):
+    """Readable session dates from one side, as a set.
+
+    The `authority` flag is not a convenience. Subject bars carry `Date` and
+    authority bars carry `date`, and this read only the subject's spelling.
+    Against real authority output it therefore returned the empty set every
+    time, which made `if sd and ad` in classify_truncation false on every
+    live run, which meant the window comparison that function's docstring
+    describes has never executed outside a hand-built fixture. The overlap
+    floor added to it was added to a branch nothing reached.
+
+    So a subject serving five sessions from 1999 against an authority serving
+    five from last week returned PASS on equal counts, which is the exact case
+    the docstring says was fixed. It was fixed in a block that could not run.
+    """
     out = set()
     for b in bars:
         if not isinstance(b, dict):
             continue
-        d = str(b.get("Date", ""))[:10]
+        if authority:
+            try:
+                d = str(_auth_date(b))[:10]
+            except Exception:
+                continue
+        else:
+            d = str(b.get("Date", ""))[:10]
         if ISO_DATE.match(d):
             out.add(d)
     return out
@@ -1200,7 +1299,32 @@ def classify_truncation(subject_bars, authority_bars):
         return (FAIL_UNSAFE, "partial_truncation",
                 f"subject returned {s} sessions where the same upstream read "
                 f"directly returned {a}, with no truncation signal")
-    sd, ad = _iso_dates(subject_bars), _iso_dates(authority_bars)
+    sd, ad = _iso_dates(subject_bars), _iso_dates(authority_bars, authority=True)
+    # The window comparison below was guarded by `if sd and ad`, so a subject
+    # whose bars carry no readable ISO date skipped it entirely and fell
+    # through to PASS on counts alone. parse_bars accepts any JSON list as the
+    # record array, so [1, 2, 3, 4] arrives here as four bars with no note, and
+    # so do four nulls, four empty dicts, and four bars dated 09/01/2026.
+    #
+    # Every one of those returned PASS reading "subject 4 sessions, authority
+    # 4". That sentence asserts a comparison of sessions against a payload
+    # where no session was identifiable, which is the defect this function's
+    # own docstring says was fixed: it counted sessions and nothing else.
+    #
+    # A count is not a window. If the subject's dates cannot be read, the
+    # served window cannot be compared to the authority's and no truncation
+    # claim is available in either direction.
+    if not sd:
+        return (INDETERMINATE, None,
+                f"the subject returned {s} entries and none of them carries a "
+                f"readable ISO 8601 date, so the served window could not be "
+                f"identified and no truncation claim is issued. Counting "
+                f"entries would compare a number against a window")
+    if not ad:
+        return (INDETERMINATE, None,
+                f"the authority returned {a} bars and none carries a readable "
+                f"date, so there is no window to compare the subject's "
+                f"{len(sd)} session(s) against")
     if sd and ad:
         shared = len(sd & ad)
         smaller = min(len(sd), len(ad))

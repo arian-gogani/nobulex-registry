@@ -580,7 +580,24 @@ def _span(start, n):
     d0 = _date.fromisoformat(start)
     return [{"Date": (d0 + _td2(days=i)).isoformat(), "Close": 100.0}
             for i in range(n)]
-_AUTH100 = _span("2026-05-01", 100)
+def _auth_span(start, n):
+    """Authority-shaped bars, and the distinction is the whole point.
+
+    a1_chart emits `date` and `ts`, not `Date`. The first version of these
+    cases built both sides with _span, so the authority side carried the
+    subject's key. _iso_dates only read `Date`, which meant `ad` was populated
+    here and empty against every real authority payload, so the window
+    comparison ran in this file and never in production. Equal counts over
+    different windows passed live while these cases reported it caught.
+
+    A fixture that does not have the shape the code meets is a test of a
+    branch nothing reaches.
+    """
+    d0 = _date.fromisoformat(start)
+    return [{"date": (d0 + _td2(days=i)).isoformat(), "ts": 0, "close": 100.0}
+            for i in range(n)]
+
+_AUTH100 = _auth_span("2026-05-01", 100)
 
 check("truncation / one shared day out of a hundred is not a clean window",
       classify_truncation(_span("2026-01-22", 100), _AUTH100),
@@ -604,6 +621,33 @@ check("truncation / a genuine short serve is still caught",
 check("truncation / an identical window still passes",
       classify_truncation(_span("2026-05-01", 100), _AUTH100),
       PASS, None, "quiet")
+
+# A count is not a window. parse_bars accepts any JSON list as the record
+# array, so a subject can hand this function four integers, four nulls or four
+# empty dicts and they arrive as four bars with no note. The window comparison
+# was guarded by `if sd and ad`, so none of those reached it and every one
+# returned PASS reading "subject 4 sessions, authority 4" about a payload
+# where no session was identifiable.
+_A4 = _auth_span("2026-09-01", 4)
+
+check("truncation / a list of integers is not four sessions",
+      classify_truncation([1, 2, 3, 4], _A4), INDETERMINATE, None, "detect")
+
+check("truncation / a list of nulls is not four sessions either",
+      classify_truncation([None] * 4, _A4), INDETERMINATE, None, "detect")
+
+check("truncation / bars with no readable date support no window claim",
+      classify_truncation([{"Date": "09/0%d/2026" % i} for i in range(1, 5)],
+                          _A4),
+      INDETERMINATE, None, "detect")
+
+check("truncation / an undatable authority payload is not a baseline",
+      classify_truncation(_span("2026-09-01", 4),
+                          [{"close": 100.0} for _ in range(4)]),
+      INDETERMINATE, None, "detect")
+
+check("truncation / a readable pair is still judged, not abstained on",
+      classify_truncation(_span("2026-09-01", 4), _A4), PASS, None, "quiet")
 
 # ==================================================== 7. stale_value freshness
 stale = [bar("2026-06-01", 1, 2, 0.5, 1.5)]
