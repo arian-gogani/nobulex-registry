@@ -432,6 +432,43 @@ check("ohlc / a clean quadruple still passes",
       classify_ohlc(_q(100.0, 101.0, 99.0, 100.5)),
       PASS, None, "quiet")
 
+# ================== 6c. equal counts over nearly-different sessions
+# The no-overlap case was already graded and the guard was binary, so a single
+# shared date defeated it. A subject serving 100 sessions that share one day
+# with the authority's 100 returned PASS reading "subject 100 sessions,
+# authority 100". The docstring said equal counts are not the same window,
+# and the code only enforced it when the windows were disjoint.
+
+from datetime import date as _date, timedelta as _td2
+def _span(start, n):
+    d0 = _date.fromisoformat(start)
+    return [{"Date": (d0 + _td2(days=i)).isoformat(), "Close": 100.0}
+            for i in range(n)]
+_AUTH100 = _span("2026-05-01", 100)
+
+check("truncation / one shared day out of a hundred is not a clean window",
+      classify_truncation(_span("2026-01-22", 100), _AUTH100),
+      INDETERMINATE, None, "detect")
+
+check("truncation / a fifth of the window shared is still not a result",
+      classify_truncation(_span("2026-02-10", 100), _AUTH100),
+      INDETERMINATE, None, "detect")
+
+# must not fire: above the pinned floor the windows are the same window, and a
+# real truncation still has to be caught. A probe that resolves every
+# comparison to INDETERMINATE has stopped answering the question.
+check("truncation / a majority-shared window is judged, not abstained on",
+      classify_truncation(_span("2026-03-13", 100), _AUTH100),
+      PASS, None, "quiet")
+
+check("truncation / a genuine short serve is still caught",
+      classify_truncation(_span("2026-05-01", 30), _AUTH100),
+      FAIL_UNSAFE, "partial_truncation", "quiet")
+
+check("truncation / an identical window still passes",
+      classify_truncation(_span("2026-05-01", 100), _AUTH100),
+      PASS, None, "quiet")
+
 # ==================================================== 7. stale_value freshness
 stale = [bar("2026-06-01", 1, 2, 0.5, 1.5)]
 check("freshness / two-month-old final bar served as current",

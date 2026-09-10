@@ -75,6 +75,16 @@ CONFIG = {
         "timezone that explains it. This is not staleness inverted: a stale "
         "bar discloses its own age in the date it carries, while a future bar "
         "is a value that nothing observed, which is fabricated_field.",
+    "truncation_min_overlap_frac": 0.5,
+    "truncation_min_overlap_note": "Counting sessions and checking that the "
+        "windows touch at all was not enough. The no-overlap case was already "
+        "graded, and a single shared date defeated it: a subject serving 100 "
+        "sessions that share one day with the authority's 100 returned PASS "
+        "reading 'subject 100 sessions, authority 100'. Equal counts over "
+        "mostly different sessions is not a truncation result any more than "
+        "equal counts over entirely different ones, so the same floor the "
+        "fidelity probe uses applies here and the case resolves INDETERMINATE "
+        "for the fidelity probe to judge on values.",
     "fidelity_min_overlap_frac": 0.5,
     "fidelity_min_overlap_note": "Matched dates must cover at least half of the "
         "smaller side, and at least two sessions, before any value comparison is "
@@ -989,9 +999,15 @@ def classify_truncation(subject_bars, authority_bars):
                 f"subject returned {s} sessions where the same upstream read "
                 f"directly returned {a}, with no truncation signal")
     sd, ad = _iso_dates(subject_bars), _iso_dates(authority_bars)
-    if sd and ad and not (sd & ad):
-        return (INDETERMINATE, None,
-                f"counts agree ({s} and {a}) but the windows do not overlap at "
-                f"all: subject {min(sd)}..{max(sd)}, authority {min(ad)}..{max(ad)}. "
-                f"Equal counts over different sessions is not a truncation result")
+    if sd and ad:
+        shared = len(sd & ad)
+        smaller = min(len(sd), len(ad))
+        floor = CONFIG["truncation_min_overlap_frac"]
+        if smaller and shared < smaller * floor:
+            return (INDETERMINATE, None,
+                    f"counts agree ({s} and {a}) but only {shared} of "
+                    f"{smaller} sessions are the same day: subject "
+                    f"{min(sd)}..{max(sd)}, authority {min(ad)}..{max(ad)}. "
+                    f"Equal counts over different sessions is not a truncation "
+                    f"result, whether they differ entirely or nearly so")
     return PASS, None, f"subject {s} sessions, authority {a}"
