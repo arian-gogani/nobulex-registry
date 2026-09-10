@@ -988,7 +988,7 @@ gate("gate / a name inside a longer word is not a match",
 
 gate("gate / a page naming nobody is not refused",
      lambda: _rr.identifies("<p>0 records published, 1 held.</p>",
-                    [("f", {"subject": {"package": "yfinance"}})]) == [],
+                    [("f", {"subject": {"package": "aqfeed"}})]) == [],
      True, "quiet")
 
 # The count of held records is compiled from files that are deliberately not
@@ -1034,6 +1034,7 @@ gate("gate / no manifest at all is not treated as a commitment to nothing",
 
 import os as _os, shutil as _shutil, tempfile as _tempfile
 import harness as _harness
+import hold as _hold
 
 def _refuses(fn):
     """True if `fn` fails closed. SystemExit is not an Exception, so a bare
@@ -1057,27 +1058,33 @@ def _survives(fn):
 # ---- the upstream pin. An unanchored `name in upstream` published mcp==2.2.0
 # as the pin a FAIL_UNSAFE rides on, because the token mcp occurs inside the
 # subject's own repository URL. mcp is the protocol library.
-_URL = "https://github.com/Alex2Yang97/yahoo-finance-mcp.git"
-_PROSE = "Yahoo Finance, via the yfinance package"
+#
+# The names below are invented and share only the shape of the real ones, for
+# the same reason section 10d's record ids are fictional: this file is tracked,
+# and a fixture that names a held subject is the disclosure the whole
+# publication gate exists to prevent. The shape is the whole test, so nothing
+# is lost by making the name up.
+_URL = "https://github.com/Example-Org/acme-quotes-mcp.git"
+_PROSE = "Acme Quotes, via the aqfeed package"
 
-gate("register / mcp is not the upstream of yahoo-finance-mcp.git",
+gate("register / mcp is not the upstream of a repository ending in -mcp.git",
      lambda: _rr.names_upstream("mcp", _URL), False, "detect")
 
 gate("register / a name is not matched inside a longer hyphenated one",
-     lambda: _rr.names_upstream("finance", _URL), False, "detect")
+     lambda: _rr.names_upstream("quotes", _URL), False, "detect")
 
 gate("register / the pin actually named by a git upstream is still found",
-     lambda: _rr.names_upstream("yahoo-finance-mcp", _URL), True, "quiet")
+     lambda: _rr.names_upstream("acme-quotes-mcp", _URL), True, "quiet")
 
 gate("register / a prose upstream still names its package",
-     lambda: _rr.names_upstream("yfinance", _PROSE), True, "quiet")
+     lambda: _rr.names_upstream("aqfeed", _PROSE), True, "quiet")
 
 gate("register / an empty upstream matches nothing",
-     lambda: _rr.names_upstream("yfinance", ""), False, "quiet")
+     lambda: _rr.names_upstream("aqfeed", ""), False, "quiet")
 
 gate("register / a direct reference pin is a name, not a file URL",
-     lambda: _rr.dist_name("yahoo-finance-mcp @ file:///tmp/x/subj")
-     == "yahoo-finance-mcp", True, "detect")
+     lambda: _rr.dist_name("acme-quotes-mcp @ file:///tmp/x/subj")
+     == "acme-quotes-mcp", True, "detect")
 
 gate("register / an extras pin is a name without its extras",
      lambda: _rr.dist_name("pkg[all]==1.0") == "pkg", True, "detect")
@@ -1092,18 +1099,18 @@ _MCP_REC = {"record_id": "NBLX-00000000-801",
                         "execution_environment": {
                             "resolved_dependencies": ["mcp==2.2.0",
                                                       "mcp-types==2.2.0",
-                                                      "yfinance==1.7.0"]}}}
+                                                      "aqfeed==1.7.0"]}}}
 
 gate("register / the dependency row does not name the protocol library",
      lambda: "mcp==2.2.0" in _rr.tuple_rows(_MCP_REC), False, "detect")
 
 gate("register / a record whose upstream is prose still names its pin",
-     lambda: "yfinance==1.5.2" in _rr.tuple_rows(
+     lambda: "aqfeed==1.5.2" in _rr.tuple_rows(
          {"record_id": "NBLX-00000000-802",
           "subject": {"package": "subj", "upstream": _PROSE,
                       "execution_environment": {
                           "resolved_dependencies": ["mcp==2.0.0",
-                                                    "yfinance==1.5.2"]}}}),
+                                                    "aqfeed==1.5.2"]}}}),
      True, "quiet")
 
 # ---- the timestamp. day() formatted the datetime as parsed and appended
@@ -1203,9 +1210,9 @@ def _note(records):
             return line.strip()
     return ""
 
-gate("register / a withheld withdrawal is not counted among the live holds",
-     lambda: "1 issued and held, 1 withdrawn and held" in _note(_withheld(1, 1)),
-     True, "detect")
+gate("register / a withheld retraction is subtracted from what is in force",
+     lambda: "2 issued and held (1 of those withdrawn and no longer in force)"
+     in _note(_withheld(1, 1)), True, "detect")
 
 gate("register / a page holding only a retraction does not call it in force",
      lambda: "A held record is in force" in _note(_withheld(1, 0)),
@@ -1216,12 +1223,30 @@ gate("register / a page holding a live record does say it is in force",
      True, "quiet")
 
 gate("register / a page holding no retraction does not explain one",
-     lambda: "withdrawn and held is not in force" in _note(_withheld(0, 2)),
+     lambda: "also withdrawn is not in force" in _note(_withheld(0, 2)),
      False, "quiet")
 
-gate("register / the live hold count is still the number of live holds",
-     lambda: "0 records published, 2 issued and held, 0 withdrawn and held"
+gate("register / a page holding a retraction does explain one",
+     lambda: "also withdrawn is not in force" in _note(_withheld(1, 1)),
+     True, "detect")
+
+gate("register / the held count is still every record being withheld",
+     lambda: "0 records published, 2 issued and held (0 of those withdrawn"
      in _note(_withheld(0, 2)), True, "quiet")
+
+# hold.py --verify-export reads the held count straight out of the published
+# page and refuses an export when it disagrees with the manifest, so the
+# phrase it parses is an interface between two files. Rewording the note
+# around it is a supported change; rewording it out from under that regex
+# publishes a page the export guard reads as stale or as understating what is
+# held, and the disagreement surfaces at push time rather than here.
+gate("register / the note still states the held count where hold.py reads it",
+     lambda: _hold.register_held_count(_note(_withheld(1, 2))) == 3,
+     True, "detect")
+
+gate("register / that count is the total withheld, not the live subset",
+     lambda: _hold.register_held_count(_note(_withheld(2, 0))) == 2,
+     True, "detect")
 
 # ---- the tally. The page asserts the verdict is the worst outcome observed
 # and nothing computed that, so a PASS record with a FAIL_UNSAFE probe
@@ -1297,7 +1322,7 @@ gate("register / a null subject does not take the card down either",
 
 gate("register / a subject that is not an object at all is survivable",
      lambda: _survives(lambda: _rr.card({"record_id": "X",
-                                         "subject": "yahoo-finance-mcp"})),
+                                         "subject": "acme-quotes-mcp"})),
      True, "detect")
 
 gate("register / a real subject is still rendered into the tuple",

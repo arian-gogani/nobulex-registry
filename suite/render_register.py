@@ -116,8 +116,11 @@ OUTCOME_ORDER = ["FAIL_UNSAFE", "FAIL_SAFE", "INDETERMINATE", "PASS",
 
 # The characters that count as part of a name when matching one inside a
 # larger string. `-` is included: a package called mcp does not appear in
-# yahoo-finance-mcp, it is part of it. Used by the upstream pin matcher below
-# and mirrored by _names().
+# acme-quotes-mcp, it is part of it. Used by the upstream pin matcher below
+# and mirrored by _names(). Every example in this file's comments and in the
+# suite's fixtures is a made-up name of the same shape as the real one, for
+# the reason hold.py's disclosure scan exists: a tracked comment that names a
+# held subject is the leak, and a comment is the last place anyone looks.
 _WORDISH = r"[0-9A-Za-z_-]"
 
 
@@ -327,7 +330,7 @@ def dist_name(pin):
     """The distribution name at the front of a resolved pin, lower-cased.
 
     A resolved pin is not always name==version. pip emits PEP 508 direct
-    references (`yahoo-finance-mcp @ file:///tmp/x/subj`), extras
+    references (`acme-quotes-mcp @ file:///tmp/x/subj`), extras
     (`pkg[all]==1.0`), and other comparison operators, and one of those is in
     the records right now. Splitting on "==" alone returns a whole file URL for
     the first of those and half a name for the third, and a string that is not
@@ -341,18 +344,17 @@ def names_upstream(name, upstream):
 
     The test used to be `name in upstream`, unanchored containment against a
     free-text upstream string, and it published the wrong dependency on a real
-    record whose upstream is a git URL ending in -mcp.git: the token mcp
-    occurs inside that URL, and the page rendered `mcp==2.2.0` beside a
-    sentence
+    record whose upstream is a git URL ending in -mcp.git. The token mcp occurs
+    inside that URL, so the page rendered `mcp==2.2.0` beside a sentence
     calling it the dependency the verdict rides on. mcp is the MCP protocol
-    library. It is not the subject's upstream, it is not what the probes
-    measured, and a reader checking the finding against that pin is checking
-    the wrong project's version.
+    library. It is not that subject's upstream, it is not what the probes
+    measured, and a reader checking the finding against that pin is checking a
+    different project's version than the one the record is about.
 
-    So the name has to sit on a boundary, with `-` counted as part of a name,
-    which is what makes mcp not a match inside yahoo-finance-mcp while
-    yahoo-finance-mcp still is, and yfinance still matches the prose upstream
-    "Yahoo Finance, via the yfinance package". Missing a pin costs the page one
+    So the name has to sit on a boundary, with `-` counted as part of a name.
+    That is what makes mcp not a match inside a name like acme-quotes-mcp while
+    acme-quotes-mcp still is, and what keeps a package name matching a prose
+    upstream that mentions it in a sentence. Missing a pin costs the page one
     row of detail. Naming the wrong one puts a number on the page that the
     record does not support, and this file exists because that happened once.
     """
@@ -933,7 +935,10 @@ def build(preview=False):
                      'not an empty template. ')
         # Each clause below is emitted only when the count it explains is
         # nonzero, so the page cannot assert "a held record is in force" on a
-        # build where nothing is held and in force.
+        # build where nothing is held and in force. That sentence was
+        # unconditional and the withheld retraction was inside the number it
+        # described, which is how the page came to say it about a record this
+        # registry had taken back.
         inforce = ""
         if held_live:
             inforce = ('A held record is in force: it is issued, its verdict '
@@ -941,19 +946,31 @@ def build(preview=False):
                        'than on us. ')
         retracted = ""
         if held_dead:
-            retracted = ('A record that is withdrawn and held is not in '
-                         'force. It was retracted, and it is counted on its '
-                         'own line rather than among the records waiting on a '
-                         'reply, because a retraction added to the live holds '
-                         'is this register overstating what it currently '
-                         'finds. ')
+            retracted = ('A held record that is also withdrawn is not in '
+                         'force. It was retracted, and it is named separately '
+                         'because a retraction folded silently into the live '
+                         'holds is this register overstating what it '
+                         'currently finds against anyone. ')
+        # The held number stays the total, including the withheld retraction,
+        # with the retraction subtracted in the same sentence rather than
+        # ahead of it. Two reasons, and the second is the load-bearing one.
+        # The total is what records/held.manifest.json commits to, file for
+        # file, and hold.py --verify-export reads this exact phrase out of the
+        # published page and refuses an export when it disagrees with the
+        # manifest. Publishing the live subset under those words would leave
+        # the page and the manifest stating two different numbers for one
+        # fact, which is the drift that check exists to catch, arrived at by
+        # fixing something else. The count of what is withheld does not change
+        # here; what changes is that the page no longer implies all of it is
+        # in force.
         note = ('    <p class="note">%d record%s published, %d issued and '
-                'held, %d withdrawn and held, and %d withdrawn and published, '
-                'compiled from the records on every build. %s%s%sNothing on '
-                'this page is typed by hand, because the one time it was, it '
-                'published a subject that could not be resolved.</p>\n'
+                'held (%d of those withdrawn and no longer in force), and %d '
+                'withdrawn and published, compiled from the records on every '
+                'build. %s%s%sNothing on this page is typed by hand, because '
+                'the one time it was, it published a subject that could not '
+                'be resolved.</p>\n'
                 % (len(shown), "" if len(shown) == 1 else "s",
-                   len(held_live), len(held_dead), len(dead),
+                   len(held), len(held_dead), len(dead),
                    empty, inforce, retracted))
     body.append(note)
 
