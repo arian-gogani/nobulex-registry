@@ -132,11 +132,15 @@ Nobulex is the **evidence provider, not the custodian.** It holds no funds, insu
 
 ---
 
-## Records expire structurally
+## Validity windows and expiry
 
-A record carries a validity window. Queried outside that window it returns `EXPIRED`, regardless of what the verdict was.
+Records carry validity metadata. The current runner assigns a seven-day window to results that do not require right of reply. Results held for reply initially have no expiry deadline; clearing assigns a seven-day window when one is missing.
 
-Not "last checked a while ago." Not a stale timestamp next to a green check. The schema cannot represent a pass that is out of date.
+The current register displays the stored verdict and its validity deadline. It does not automatically change the displayed verdict to `EXPIRED` when that deadline passes. Readers must check the deadline, and a historical `PASS` must not be treated as evidence of current behavior.
+
+Automatic expiry at lookup is intended behavior, not implemented enforcement in this register. The stored observation remains historical evidence; whether it is still current needs a separate check.
+
+Correction: this section previously claimed that an out-of-window query returns `EXPIRED` and that the schema cannot represent an expired pass. The current implementation does not support those claims.
 
 **There will never be a portable badge image.** A PNG a maintainer can copy into a README is a claim that outlives its evidence, keeps rendering green after the verdict is withdrawn, and cannot be revoked. That mechanism is the specific way this category of business has failed before. Verification resolves against the register, live, or it does not resolve.
 
