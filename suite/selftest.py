@@ -623,6 +623,40 @@ _results.append((_fut_cause == "fabricated_field", "detect",
                  "a value nobody observed is not an observation that aged"))
 
 # ======================================================= 8. wrong_entity
+# Six shapes used to raise AttributeError out of this classifier rather than
+# returning a verdict: a payload that is a JSON list or bare string has no
+# .get, and a name or registrant arriving as a number, dict, list or bool has
+# no .lower. run.py's boundary caught the raise and recorded INDETERMINATE, so
+# no run died, but the evidence became a traceback instead of a sentence
+# naming what the subject did. A subject answering {"longName": 12345} is
+# doing something worth describing.
+check("entity / a numeric name field is described, not raised on",
+      classify_entity(json.dumps({"longName": 12345}), "Apple Inc."),
+      INDETERMINATE, None, "detect")
+
+check("entity / a structured name field is described, not raised on",
+      classify_entity(json.dumps({"longName": {"x": 1}}), "Apple Inc."),
+      INDETERMINATE, None, "detect")
+
+check("entity / a payload that is a list carries no name field to read",
+      classify_entity(json.dumps([{"longName": "Apple"}]), "Apple Inc."),
+      INDETERMINATE, None, "detect")
+
+check("entity / a payload that is a bare string carries none either",
+      classify_entity('"just a string"', "Apple Inc."),
+      INDETERMINATE, None, "detect")
+
+check("entity / a non-string registrant is the authority's failure, not the subject's",
+      classify_entity(json.dumps({"longName": "Apple Inc."}), 12345),
+      INDETERMINATE, None, "detect")
+
+# must not fire: the probe still has to reach both real verdicts, and a null
+# longName still has to fall through to shortName.
+check("entity / a null longName still falls through to shortName",
+      classify_entity(json.dumps({"longName": None, "shortName": "Apple Inc"}),
+                      "Apple Inc."),
+      PASS, None, "quiet")
+
 check("entity / subject names a different registrant",
       classify_entity(json.dumps({"longName": "Banco Santander SA"}),
                       "Apple Inc."),

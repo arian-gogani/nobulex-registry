@@ -977,9 +977,30 @@ def classify_entity(info_text, registrant):
         info = json.loads(info_text)
     except Exception:
         return INDETERMINATE, None, "stock info payload is not JSON"
+    # Six paths through here used to raise AttributeError out of the
+    # classifier: a payload that was a JSON list or bare string has no .get,
+    # and a name or registrant arriving as a number, dict, list or bool has no
+    # .lower. run.py's boundary catches the raise and records INDETERMINATE, so
+    # the run survived, but the evidence became a traceback instead of a
+    # sentence naming what the subject actually did. A subject answering
+    # {"longName": 12345} is doing something worth describing, and the probe
+    # that noticed should be the thing that describes it. Same correction
+    # classify_window_span already carries for strptime.
+    if not isinstance(info, dict):
+        return (INDETERMINATE, None,
+                f"stock info payload is JSON but not an object, it is a "
+                f"{type(info).__name__}, so it carries no name field to read")
     name = info.get("longName") or info.get("shortName") or ""
+    if not isinstance(name, str):
+        return (INDETERMINATE, None,
+                f"the subject's name field is a {type(name).__name__}, not a "
+                f"string, so it cannot be compared to a registrant name")
     if not name:
         return INDETERMINATE, None, "no name field in payload"
+    if not isinstance(registrant, str):
+        return (INDETERMINATE, None,
+                f"the registrant value is a {type(registrant).__name__}, not a "
+                f"string; the authority read did not produce a comparable name")
     a, b = _norm_name(name), _norm_name(registrant)
     if not a or not b:
         return (INDETERMINATE, None,
