@@ -53,6 +53,9 @@ Usage:  python3 suite/hold.py --commit   (write the manifest from the records)
         python3 suite/hold.py --verify-export
                                          (for the public repo, where the
                                           records must be absent, not intact)
+        python3 suite/hold.py --clear RECORD-ID
+                                         (open the gate on one record, by name,
+                                          after its obligation is discharged)
 """
 import hashlib
 import io
@@ -739,7 +742,177 @@ def cmd_verify_export():
     return rc
 
 
+CLEARED_STATUS = "CLEARED"
+# render_register.py publishes a record only when its publication status is one
+# of these. It is deliberately a short list and deliberately does not include
+# PUBLISHABLE, the status run.py writes for a non-adverse verdict, because a
+# verdict the harness liked is not the same event as a person deciding to
+# publish it. That distinction is the entire reason the gate exists.
+RENDERER_ACCEPTS = ("CLEARED", "PUBLISHED")
+
+
+def _record_paths():
+    """Every record file, held or not, by record_id.
+
+    Both directories, because a non-adverse record is written straight to
+    records/ by the runner while an adverse one is filed under records/held/,
+    and clearing has to find either. Which directory a file sits in is a fact
+    about storage. Whether it may publish is a fact about its publication
+    block, and only that block is consulted below.
+    """
+    found = {}
+    for d in (RECORDS, HELD):
+        if not os.path.isdir(d):
+            continue
+        for name in sorted(os.listdir(d)):
+            if not name.endswith(".json") or name.endswith(".manifest.json"):
+                continue
+            path = os.path.join(d, name)
+            if not os.path.isfile(path):
+                continue
+            try:
+                with io.open(path, encoding="utf-8") as fh:
+                    rec = json.load(fh)
+            except ValueError:
+                continue
+            rid = rec.get("record_id")
+            if rid:
+                found[rid] = (path, rec)
+    return found
+
+
+def _reply_obligation_unmet(rec):
+    """Why this record may not publish yet, or None if nothing blocks it.
+
+    The rule this enforces is the one in the record's own right_of_reply block:
+    an adverse finding reaches its subject before it reaches the public, and
+    the subject gets the full window to answer. A record that never went out
+    has not satisfied that by waiting, because nothing was ever sent. Silence
+    from someone who was never written to is not silence, it is absence.
+    """
+    pub = rec.get("publication") or {}
+    ror = pub.get("right_of_reply") or {}
+    if not ror.get("required"):
+        return None
+    if not ror.get("artifact_delivered_at"):
+        return ("the artifact was never delivered, so the window never "
+                "opened. Deliver it, record artifact_delivered_at and "
+                "window_closes_at, then clear.")
+    closes = ror.get("window_closes_at")
+    if not closes:
+        return ("delivered, but window_closes_at is unset, so there is no "
+                "stated deadline this record can be past.")
+    from datetime import datetime, timezone
+    try:
+        deadline = datetime.fromisoformat(str(closes).replace("Z", "+00:00"))
+    except ValueError:
+        return "window_closes_at is not a readable timestamp: %r" % (closes,)
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    if now < deadline and not ror.get("reply_received_at"):
+        return ("the reply window is still open until %s and no reply has "
+                "arrived. Publishing now would take the window back."
+                % deadline.isoformat())
+    return None
+
+
+def cmd_clear(record_id):
+    """Open the gate on exactly one record, named on the command line.
+
+    There is no --all and no globbing, on purpose. Publication is the one
+    irreversible thing this registry does: a verdict about a named third party
+    goes in front of the public, and no later edit unpublishes what was read.
+    An operation like that should cost one deliberate invocation per record and
+    should appear in shell history with the record's own identifier in it.
+
+    This command does not decide anything. It records that a person decided,
+    and it refuses when the record's stated obligation to its subject has not
+    actually been discharged.
+    """
+    found = _record_paths()
+    if record_id not in found:
+        sys.stderr.write("REFUSED: no record with id %s under records/ or "
+                         "records/held/.\n" % record_id)
+        if found:
+            sys.stderr.write("  present: %s\n" % ", ".join(sorted(found)))
+        return 1
+
+    path, rec = found[record_id]
+    pub = rec.get("publication") or {}
+    status = (pub.get("status") or "").strip().upper()
+
+    if status in RENDERER_ACCEPTS:
+        sys.stderr.write("REFUSED: %s is already %s. Nothing to do.\n"
+                         % (record_id, status))
+        return 1
+
+    if (rec.get("status") or "").upper() == "WITHDRAWN":
+        sys.stderr.write("REFUSED: %s is withdrawn. A withdrawn record is not "
+                         "republished, it stays withdrawn and the withdrawal "
+                         "is the public fact.\n" % record_id)
+        return 1
+
+    blocked = _reply_obligation_unmet(rec)
+    if blocked:
+        sys.stderr.write("REFUSED: %s cannot clear yet.\n  %s\n"
+                         % (record_id, blocked))
+        return 1
+
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+
+    pub["status"] = CLEARED_STATUS
+    pub["cleared_at"] = now.isoformat()
+    pub["cleared_from"] = status or "unstated"
+    rec["publication"] = pub
+
+    # The validity clock starts here, not at observation. An adverse record
+    # spends an unbounded stretch between being observed and being cleared,
+    # because delivery and the reply window are human-paced. Dating the window
+    # from the run is what left earlier records expired before anyone could
+    # have read them. See _validity_block in suite/run.py.
+    val = rec.get("validity") or {}
+    if not val.get("until"):
+        from datetime import timedelta
+        val["from"] = now.isoformat()
+        val["until"] = (now + timedelta(days=7)).isoformat()
+        val["note"] = ("Queried outside this window the record returns "
+                       "EXPIRED regardless of verdict. The window starts at "
+                       "clearing, not at observation, because the record was "
+                       "not readable by anyone before it cleared.")
+        rec["validity"] = val
+
+    with io.open(path, "w", encoding="utf-8") as fh:
+        json.dump(rec, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
+
+    moved_to = path
+    if os.path.dirname(os.path.abspath(path)) == os.path.abspath(HELD):
+        dest = os.path.join(RECORDS, os.path.basename(path))
+        os.rename(path, dest)
+        moved_to = dest
+
+    print("CLEARED  %s" % record_id)
+    print("  status   %s -> %s" % (pub["cleared_from"], CLEARED_STATUS))
+    print("  valid    %s .. %s" % (rec["validity"].get("from"),
+                                   rec["validity"].get("until")))
+    print("  file     %s" % os.path.relpath(moved_to, ROOT))
+    print()
+    print("This record is now publishable and nothing has published it yet.")
+    print("Next, in order:")
+    print("  python3 suite/hold.py --commit      (the held set changed)")
+    print("  python3 suite/render_register.py    (rebuild the page)")
+    return 0
+
+
 def main(argv):
+    if "--clear" in argv:
+        i = argv.index("--clear")
+        if i + 1 >= len(argv):
+            sys.stderr.write("REFUSED: --clear needs a record id, by name.\n")
+            return 1
+        return cmd_clear(argv[i + 1])
     if "--commit" in argv:
         return cmd_commit(amend="--amend" in argv)
     if "--verify-export" in argv:
