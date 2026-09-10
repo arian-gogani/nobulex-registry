@@ -253,7 +253,9 @@ shasum -a 256 brand/register.html
 curl -sS https://nobulex.com/register | shasum -a 256
 ```
 
-Both should print `4b8aa822c5883b1022ef1aa1459768a2c024a64674ca823eae5ce24acfcf9051`.
+Both should print `c3608fd261e046adf15cd14760f39e65c18c62f3c6b7a689182c82e267fdc783` after deployment of the expiry-copy correction.
+
+Correction provenance: the expiry explanation was changed in the template and identically in the committed and website HTML copies, without rerendering held records. The local copies were compared byte for byte. This was a direct static-copy correction, not a fresh record build; the command above independently checks the deployed copy.
 
 This is worth two minutes because it is the one claim on this project that a stranger can settle right now, without waiting on a reply window and without taking anyone's word for anything. The register is compiled from the records by `suite/render_register.py`, which writes identical bytes to every publish target in one build, specifically so that no hand can reach the page between the records and the reader. A downstream copy step is a second author, and a second author of that page is a second chance to publish a name that is under embargo. If those two hashes ever disagree, something edited the published page after the generator produced it, and you should say so loudly.
 
