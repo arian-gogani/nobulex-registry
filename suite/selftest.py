@@ -373,6 +373,65 @@ check("monotonic / clean ordering passes",
       classify_monotonic(CLEAN_BARS),
       PASS, None, "quiet")
 
+# ============================== 6b. nan and inf are not prices
+# _numeric admitted both, because both are instances of float, and each broke
+# a different comparison in a different direction.
+#
+# The fidelity case is the one worth stating plainly. Every comparison against
+# nan is False, so `rel > worst` never fired and `worst` stayed 0.0. A payload
+# whose every close was nan returned PASS with the evidence string "4
+# overlapping sessions compared, worst deviation 0.00000% within tolerance".
+# Nothing was compared. The sentence asserted the comparison the nan had just
+# prevented, which is the same defect shape the register grades others for.
+
+NAN, INF = float("nan"), float("inf")
+_auth4 = [{"date": d, "close": 100.0} for d in
+          ("2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04")]
+def _sub4(closes):
+    return [{"Date": d, "Close": c} for d, c in zip(
+        ("2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04"), closes)]
+_TOL = CONFIG["price_tolerance_rel"]
+_OV = CONFIG["fidelity_min_overlap_frac"]
+
+check("fidelity / every close nan is not a clean comparison, it is no comparison",
+      classify_fidelity(_sub4([NAN] * 4), _auth4, _TOL, _OV),
+      INDETERMINATE, None, "detect")
+
+check("fidelity / a single nan close is not silently dropped into a pass",
+      classify_fidelity(_sub4([100.0, NAN, 100.0, 100.0]), _auth4, _TOL, _OV),
+      INDETERMINATE, None, "detect")
+
+check("fidelity / an infinite close is not a readable price",
+      classify_fidelity(_sub4([100.0, INF, 100.0, 100.0]), _auth4, _TOL, _OV),
+      INDETERMINATE, None, "detect")
+
+# must not fire: the probe still has to catch a real deviation, and still has
+# to pass a payload that genuinely matches. A guard that resolves everything
+# to INDETERMINATE is not a guard, it is an abstention.
+check("fidelity / a real 50% deviation is still caught",
+      classify_fidelity(_sub4([100.0, 150.0, 100.0, 100.0]), _auth4, _TOL, _OV),
+      FAIL_UNSAFE, "stale_value", "quiet")
+
+check("fidelity / a payload that matches the authority still passes",
+      classify_fidelity(_sub4([100.0] * 4), _auth4, _TOL, _OV),
+      PASS, None, "quiet")
+
+def _q(o, h, l, c):
+    return [{"Date": "2026-08-0%d" % (i + 1), "Open": o, "High": h,
+             "Low": l, "Close": c} for i in range(1, 5)]
+
+check("ohlc / an infinite high satisfies every inequality and is still unreadable",
+      classify_ohlc(_q(100.0, INF, 99.0, 100.5)),
+      INDETERMINATE, None, "detect")
+
+check("ohlc / a nan quadruple is unreadable, not an inequality violation",
+      classify_ohlc(_q(NAN, NAN, NAN, NAN)),
+      INDETERMINATE, None, "detect")
+
+check("ohlc / a clean quadruple still passes",
+      classify_ohlc(_q(100.0, 101.0, 99.0, 100.5)),
+      PASS, None, "quiet")
+
 # ==================================================== 7. stale_value freshness
 stale = [bar("2026-06-01", 1, 2, 0.5, 1.5)]
 check("freshness / two-month-old final bar served as current",

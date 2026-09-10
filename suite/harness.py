@@ -18,7 +18,7 @@ traceback attached. A harness whose failure mode is a silent pass is the
 exact product defect this registry exists to detect.
 """
 
-import json, re, select, subprocess, sys, time, traceback
+import json, math, re, select, subprocess, sys, time, traceback
 import urllib.error, urllib.request
 from datetime import datetime, timezone, timedelta
 
@@ -756,8 +756,31 @@ def _uniform_lag(sub, auth, tol):
     return None
 
 def _numeric(v):
-    """True only for a real number. bool is excluded: True would compare as 1."""
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    """True only for a real number. bool is excluded: True would compare as 1.
+
+    nan and inf are excluded too, and they are the reason this docstring was
+    a lie before it was a specification. Both are instances of float, so both
+    were admitted as prices, and each broke a different comparison:
+
+    nan silently passed everything. Every comparison against nan is False, so
+    in classify_ohlc `not (l <= min(o, c) ...)` was True and the bar was called
+    an inequality violation, while in classify_fidelity `rel > worst` was False
+    and `worst` never moved off 0.0. A payload whose every close was nan
+    returned PASS reporting "4 overlapping sessions compared, worst deviation
+    0.00000% within tolerance". Nothing was compared. The evidence string
+    asserted the comparison that the nan had just prevented.
+
+    inf passed classify_ohlc, where `h >= max(o, c)` and `l <= h` both hold
+    with an infinite high, so a bar with an infinite price was internally
+    consistent.
+
+    Excluded here rather than at each call site so that a third caller cannot
+    inherit the same hole. Both now fall to the unreadable path, which is
+    INDETERMINATE, which dominates PASS. That is the correct verdict: a price
+    that is nan or inf was not read, and a probe that cannot read a value has
+    not established anything about it."""
+    return (isinstance(v, (int, float)) and not isinstance(v, bool)
+            and math.isfinite(v))
 
 def classify_ohlc(bars):
     """Probe: internal consistency. low <= open,close <= high.
