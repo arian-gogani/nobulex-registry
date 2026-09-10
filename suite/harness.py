@@ -188,12 +188,35 @@ class MCPStdio:
     def call(self, name, arguments):
         """Returns (text, is_error_flag, raw_response)."""
         r = self.request("tools/call", {"name": name, "arguments": arguments})
-        if "error" in r:
+        # Key presence, not truth. JSON-RPC says error must be absent on
+        # success, but "error": null next to a valid result is what a struct
+        # without omitempty, or a model with a nullable field, serializes to.
+        # `"error" in r` read that as a refusal, discarded the body, and
+        # returned is_error=True. A subject fabricating 250 bars for a ticker
+        # that does not exist was then graded PASS, "refused through the
+        # protocol error channel", on P01, P02 and P11, and run.py wrote the
+        # same false sentence into P04 through P08 as well.
+        if r.get("error") is not None:
             return None, True, r
         res = r.get("result", {})
         parts = [c.get("text", "") for c in res.get("content", [])
                  if c.get("type") == "text"]
-        return "\n".join(parts), bool(res.get("isError")), r
+        # bool("false") is True, and so is bool("0") and bool("no"). A subject
+        # serializing the flag as a string got the same PASS flip by a
+        # different route. Only the two real booleans are an answer here.
+        # Anything else is unknown state, and unknown state resolves toward the
+        # finding rather than away from it, so it is reported as an error flag
+        # the caller cannot rely on rather than silently coerced.
+        flag = res.get("isError")
+        if flag is True or flag is False:
+            is_error = flag
+        else:
+            is_error = False
+            if flag is not None:
+                self.protocol_noise.append(
+                    "isError was %r, which is neither true nor false"
+                    % (flag,))
+        return "\n".join(parts), is_error, r
 
     def close(self):
         # Idempotent. The runner closes early when startup fails, so it can put
@@ -699,8 +722,21 @@ def classify_fidelity(subject_bars, authority_bars, tol,
         else:
             unreadable += 1
     auth = {}
+    auth_unreadable = 0
     for b in authority_bars:
-        if b.get("close") is None:
+        # _numeric, not "is not None". The subject's closes were routed through
+        # _numeric and the authority's were not, so the nan hole that _numeric
+        # exists to close stayed open on this side of the comparison. json.loads
+        # accepts the bare token NaN, so it arrives here from the wire intact.
+        #
+        # The consequence is identical to the subject-side bug and reaches the
+        # same evidence string: nan == 0 is False so the session counts as
+        # compared, rel is nan, nan > worst is False so worst never leaves 0.0,
+        # and the probe returns PASS reading "worst deviation 0.00000% within
+        # tolerance". An authority column of nan hides subject corruption on
+        # every session it covers.
+        if not _numeric(b.get("close")):
+            auth_unreadable += 1
             continue
         auth[_auth_date(b)] = b["close"]
     common = sorted(set(sub) & set(auth))
@@ -710,6 +746,11 @@ def classify_fidelity(subject_bars, authority_bars, tol,
     # as strings left two clean ones, two of two aligned, and the floor was
     # satisfied by discarding the evidence against it.
     smaller = min(len(subject_bars), len(auth))
+    if auth_unreadable and not auth:
+        return (INDETERMINATE, None,
+                f"all {auth_unreadable} authority bars carried no readable "
+                f"numeric close, so there was nothing to compare the subject "
+                f"against and no fidelity claim is issued")
     if not common:
         return (INDETERMINATE, None,
                 f"no overlapping dates. subject={sorted(sub)[:3]} "

@@ -468,6 +468,25 @@ check("fidelity / an infinite close is not a readable price",
 # must not fire: the probe still has to catch a real deviation, and still has
 # to pass a payload that genuinely matches. A guard that resolves everything
 # to INDETERMINATE is not a guard, it is an abstention.
+# The authority side of the same nan hole. _numeric was applied to the
+# subject's closes and not to the authority's, so the fix left the third
+# caller its own docstring names uncovered. json.loads accepts the bare token
+# NaN, so it arrives from the wire intact, and the consequence is identical:
+# nan == 0 is False so the session counts as compared, rel is nan, nan > worst
+# is False, and the probe returns PASS reading "worst deviation 0.00000%
+# within tolerance" while comparing against nothing.
+_auth_nan = [{"date": d, "close": NAN} for d in
+             ("2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04")]
+check("fidelity / an authority column of nan is nothing to compare against",
+      classify_fidelity(_sub4([100.0] * 4), _auth_nan, _TOL, _OV),
+      INDETERMINATE, None, "detect")
+
+_auth_inf = [{"date": d, "close": INF} for d in
+             ("2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04")]
+check("fidelity / an infinite authority close is not a readable price either",
+      classify_fidelity(_sub4([100.0] * 4), _auth_inf, _TOL, _OV),
+      INDETERMINATE, None, "detect")
+
 check("fidelity / a real 50% deviation is still caught",
       classify_fidelity(_sub4([100.0, 150.0, 100.0, 100.0]), _auth4, _TOL, _OV),
       FAIL_UNSAFE, "stale_value", "quiet")
@@ -1938,6 +1957,33 @@ def _call(body):
         return c.call("t", {})
     finally:
         c.close()
+
+# Two ways a subject flips a finding into a pass through the flag channel,
+# both reproduced against real subprocesses.
+#
+# `"error" in r` tested key presence, not truth. JSON-RPC says error must be
+# absent on success, but "error": null beside a valid result is what a struct
+# without omitempty serializes to. A subject fabricating bars for a ticker
+# that does not exist was graded PASS, "refused through the protocol error
+# channel", and the body was discarded so the record kept no evidence either.
+_transport("a null error field beside a result is not a refusal",
+           lambda: _call("import sys,json\n"
+                         "req=json.loads(sys.stdin.readline())\n"
+                         "print(json.dumps({'jsonrpc':'2.0','id':req['id'],"
+                         "'error':None,'result':{'content':"
+                         "[{'type':'text','text':'FABRICATED'}],"
+                         "'isError':False}}))\n")[:2],
+           ("FABRICATED", False), "detect")
+
+# bool("false") is True, and so is bool("0") and bool("no").
+_transport("the string false is not a true error flag",
+           lambda: _call("import sys,json\n"
+                         "req=json.loads(sys.stdin.readline())\n"
+                         "print(json.dumps({'jsonrpc':'2.0','id':req['id'],"
+                         "'result':{'content':"
+                         "[{'type':'text','text':'FABRICATED'}],"
+                         "'isError':'false'}}))\n")[:2],
+           ("FABRICATED", False), "detect")
 
 _transport("text content is joined out of the result",
            lambda: _call("import sys,json\n"
