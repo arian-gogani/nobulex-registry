@@ -20,6 +20,18 @@ python3 suite/selftest.py
 
 No package install is required for the self-test. If you find a corrupted response it calls clean, open an issue with the smallest reproduction you can make. If you want to follow the work, star the repository.
 
+### Try one failure in a minute
+
+```bash
+python3 examples/wrong_window.py
+```
+
+This offline example feeds fictional data into the suite's actual truncation classifier. It shows three cases: matching sessions (`PASS`), silently missing sessions (`FAIL_UNSAFE`), and equal row counts covering entirely different dates (`INDETERMINATE`). The last case passes a count-only comparison, but this probe cannot establish a clean result from it.
+
+The script checks all three expected outcomes and exits nonzero if any changes. It needs only Python 3.11 or newer. No credentials or downloads are needed after cloning. This demonstrates one classifier, not a live tool test or a registry attestation. Even its `PASS` does not establish that the prices are correct.
+
+Found an input that produces the wrong verdict? [Open an issue](https://github.com/arian-gogani/nobulex-registry/issues/new) with fictional or shareable input, the command you ran, the actual output, and the result you expected. Please leave credentials and private data out.
+
 ---
 
 ## The failure this exists for
