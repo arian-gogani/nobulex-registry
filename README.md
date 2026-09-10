@@ -144,11 +144,13 @@ Not "last checked a while ago." Not a stale timestamp next to a green check. The
 
 ## Who pays
 
-**The buyer pays. Never the graded party for its own first verdict.**
+**The party relying on the verification pays. Never the graded party for its own verdict or re-test.**
 
 A maintainer cannot commission a verdict on its own package, cannot preview one before publication, and cannot negotiate one. The moment revenue depends on the subject's satisfaction, every verdict becomes a negotiation, and the registry's output is worth precisely nothing. This constraint costs real money early. It is what the entire thing is made of.
 
-One narrow exception exists, and it is bounded by three conditions that are all mandatory and all published on the record itself. A maintainer may fund a **re-test** of a subject already in the register, after a fix. When it does: the funding source is disclosed on the record, the methodology is the already-published suite and cannot be altered for the run, and the result publishes regardless of outcome. A vendor who pays for a re-test and fails gets a `FAIL_UNSAFE` record with their name on the invoice line.
+Maintainers can submit fixes and evidence for review, but cannot buy a re-test of their own tool. Re-tests follow the published methodology and retain the same funding separation.
+
+Correction: this README previously allowed maintainer-funded re-tests. That exception contradicted the buyer-funded policy stated on the site. It is removed here. This is a policy correction, not evidence that any paid re-test took place. Independent verification also requires reproducible evidence and a checkable method; the funding rule alone does not establish it.
 
 ---
 
