@@ -45,7 +45,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RECORDS = os.path.join(ROOT, "records")
@@ -103,6 +103,37 @@ VERDICT_VAR = {
     "HELD": "--safe",
 }
 
+# Probe outcomes, worst first. This is the order the page asserts in prose
+# under every probe tally, and card() now checks the record against it instead
+# of asserting it. It is stated here rather than imported from harness.py
+# because the renderer reads records and does not run subjects, and a renderer
+# that imports the harness inherits everything the harness imports. The
+# duplication is the risk that creates, so selftest.py asserts this list is
+# identical to harness._ORDER: a second copy is allowed to exist only while
+# something fails when the two disagree.
+OUTCOME_ORDER = ["FAIL_UNSAFE", "FAIL_SAFE", "INDETERMINATE", "PASS",
+                 "OUT_OF_SCOPE"]
+
+# The characters that count as part of a name when matching one inside a
+# larger string. `-` is included: a package called mcp does not appear in
+# yahoo-finance-mcp, it is part of it. Used by the upstream pin matcher below
+# and mirrored by _names().
+_WORDISH = r"[0-9A-Za-z_-]"
+
+
+def _dict(v):
+    """A record field that has to be an object, or an empty one.
+
+    `rec.get("subject", {})` returns the null, not the default, when the key
+    is present and explicitly set to null, which is a shape run.py can write
+    and a shape a hand-edited record can carry. tuple_rows() and card() then
+    called .get on None and the whole build died with an AttributeError
+    naming a line number. Fail closed and render nothing about a subject
+    rather than take the page down: a malformed record must not be able to
+    stop the held count and the embargo notice from being published.
+    """
+    return v if isinstance(v, dict) else {}
+
 
 def esc(v):
     """HTML-escape. Record text is data and is never trusted as markup."""
@@ -113,14 +144,35 @@ def esc(v):
 
 
 def day(ts):
-    """An ISO timestamp as a calendar day, or the input unchanged."""
+    """An ISO timestamp rendered in UTC, or the input unchanged.
+
+    This used to format the datetime as parsed and staple " UTC" onto the end
+    of it, which is a claim about the timestamp rather than a rendering of it.
+    A record observed at 2026-08-03T13:04:00+02:00 published as
+    "2026-08-03 13:04 UTC" when the instant is 11:04 UTC, a two hour error in
+    the Observed and Valid until lines, which are the only two the whole record
+    is anchored to and the two a reader uses to decide whether a validity
+    window has closed. Today's records are all written with a +00:00 offset so
+    the printed strings did not move, which is exactly why this survived: the
+    defect is invisible until the day a run happens on a machine that is not
+    on UTC, and on that day the page is wrong and looks fine.
+
+    A timestamp with no offset at all got the suffix too. That one cannot be
+    converted, because nothing in the record says what zone it was written in,
+    so it is not converted and it is not labelled UTC either. Printing the
+    digits and naming the thing that is missing is the only honest option; the
+    alternative is to guess a zone and assert it, which is the failure this
+    registry publishes verdicts about.
+    """
     if not ts:
         return ""
     try:
-        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).strftime(
-            "%Y-%m-%d %H:%M UTC")
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
     except ValueError:
         return str(ts)
+    if dt.tzinfo is None:
+        return dt.strftime("%Y-%m-%d %H:%M") + " (no time zone stated)"
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
 def load(dirpath):
@@ -271,9 +323,49 @@ ATTEST_GLOSS = {
 }
 
 
+def dist_name(pin):
+    """The distribution name at the front of a resolved pin, lower-cased.
+
+    A resolved pin is not always name==version. pip emits PEP 508 direct
+    references (`yahoo-finance-mcp @ file:///tmp/x/subj`), extras
+    (`pkg[all]==1.0`), and other comparison operators, and one of those is in
+    the records right now. Splitting on "==" alone returns a whole file URL for
+    the first of those and half a name for the third, and a string that is not
+    a name cannot be matched against an upstream as though it were one.
+    """
+    return re.split(r"[\s\[=<>!~;@]", str(pin), maxsplit=1)[0].strip().lower()
+
+
+def names_upstream(name, upstream):
+    """Does `upstream` name the distribution `name`, on a name boundary?
+
+    The test used to be `name in upstream`, unanchored containment against a
+    free-text upstream string, and it published the wrong dependency on a real
+    record whose upstream is a git URL ending in -mcp.git: the token mcp
+    occurs inside that URL, and the page rendered `mcp==2.2.0` beside a
+    sentence
+    calling it the dependency the verdict rides on. mcp is the MCP protocol
+    library. It is not the subject's upstream, it is not what the probes
+    measured, and a reader checking the finding against that pin is checking
+    the wrong project's version.
+
+    So the name has to sit on a boundary, with `-` counted as part of a name,
+    which is what makes mcp not a match inside yahoo-finance-mcp while
+    yahoo-finance-mcp still is, and yfinance still matches the prose upstream
+    "Yahoo Finance, via the yfinance package". Missing a pin costs the page one
+    row of detail. Naming the wrong one puts a number on the page that the
+    record does not support, and this file exists because that happened once.
+    """
+    if not name or not upstream:
+        return False
+    return re.search(r"(?<!%s)%s(?!%s)"
+                     % (_WORDISH, re.escape(name), _WORDISH),
+                     upstream.lower()) is not None
+
+
 def tuple_rows(rec):
     """The subject tuple, exactly as the record states it."""
-    s = rec.get("subject", {})
+    s = _dict(rec.get("subject"))
     cfg = s.get("configuration", {}) or {}
     env = s.get("execution_environment", {}) or {}
     out = ['      <div class="tuple">\n']
@@ -330,9 +422,8 @@ def tuple_rows(rec):
     if res or dec:
         # Surface the pin of whatever the record names as its upstream, since
         # that is the dependency the verdict actually rides on.
-        up = (s.get("upstream") or "").lower()
-        keyed = [p for p in res
-                 if p.split("==")[0].lower() in up]
+        up = s.get("upstream") or ""
+        keyed = [p for p in res if names_upstream(dist_name(p), up)]
         # An empty declared list means the harness did not capture one, not
         # that the project declares nothing. Reporting it as zero would be the
         # same mistake this registry publishes verdicts about.
@@ -351,7 +442,12 @@ def tuple_rows(rec):
         reach = a.get("reachable")
         if reach is False:
             tag += " · unreachable at run time"
-        out.append(row("Authority %s" % esc(key),
+        # Not esc(key). row() escapes the field itself, and escaping here as
+        # well ran the key through twice, so an authority keyed A&B published
+        # as "Authority A&amp;amp;B". Every other call site passes a literal,
+        # which is why the double escape only ever showed on a key with an
+        # ampersand in it and never on A1 or A2.
+        out.append(row("Authority %s" % key,
                        "%s · %s · %s" % (esc(a.get("id")),
                                          esc(a.get("role")), esc(tag)),
                        pending=(indep is False or reach is False)))
@@ -424,17 +520,65 @@ def tally(rec):
     counts = {}
     for p in rec.get("probes") or []:
         counts[p.get("outcome")] = counts.get(p.get("outcome"), 0) + 1
-    order = ["FAIL_UNSAFE", "FAIL_SAFE", "INDETERMINATE", "PASS",
-             "OUT_OF_SCOPE"]
-    seen = [k for k in order if k in counts] + \
-           [k for k in sorted(counts) if k not in order]
+    seen = [k for k in OUTCOME_ORDER if k in counts] + \
+           [k for k in sorted(counts) if k not in OUTCOME_ORDER]
     return " · ".join("%d %s" % (counts[k], k) for k in seen)
 
 
+def verdict_disagrees(rec):
+    """Why the record's verdict is not the worst outcome its probes recorded.
+
+    Returns a sentence, or "" when the record and its own probes agree.
+
+    The page prints, under every tally, "The verdict is the worst outcome
+    observed, in the order FAIL_UNSAFE, FAIL_SAFE, INDETERMINATE, PASS,
+    OUT_OF_SCOPE." Nothing computed that. The sentence was rendered from a
+    constant beside a table of counts that could say anything, so a record
+    carrying verdict PASS and a FAIL_UNSAFE probe published both, with a
+    sentence between them asserting the two were the same thing. That is the
+    register contradicting itself on the page and calling the contradiction a
+    rule, which is worse than either half alone: a reader who trusts the
+    sentence reads the wrong verdict and a reader who reads the table cannot
+    tell which of the two the registry means.
+
+    An outcome this file cannot rank is a disagreement too, not a pass. It
+    cannot be shown to be the worst and the page would be asserting that it is.
+    """
+    probes = rec.get("probes") or []
+    if not probes:
+        return ""
+    outcomes = [p.get("outcome") for p in probes]
+    unknown = sorted({str(o) for o in outcomes if o not in OUTCOME_ORDER})
+    if unknown:
+        return ("probe outcome %s cannot be ranked, so the record cannot be "
+                "shown to carry the worst one" % ", ".join(unknown))
+    worst = next(o for o in OUTCOME_ORDER if o in outcomes)
+    verdict = rec.get("verdict")
+    if verdict != worst:
+        return ("verdict is %s and the worst outcome its probes recorded is %s"
+                % (verdict, worst))
+    return ""
+
+
 def card(rec):
+    # Refuse before a single byte of the card is built, for the same reason
+    # build() refuses on an embargo notice that names a verdict: a page that
+    # contradicts itself should not exist on disk, not even briefly, and the
+    # fix belongs in the record rather than in the renderer that printed it.
+    why = verdict_disagrees(rec)
+    if why:
+        raise SystemExit(
+            "record %s does not carry the verdict its own probes support: %s.\n"
+            "  Nothing was written. The page states under every tally that the\n"
+            "  verdict is the worst outcome observed, so publishing this one\n"
+            "  publishes the sentence and the counterexample together. Re-run\n"
+            "  the subject under newly pinned conditions, or correct the\n"
+            "  record. Do not edit the sentence."
+            % (rec.get("record_id", "(no record_id)"), why))
+
     rid = rec.get("record_id", "")
     number = rid.split("-")[-1] if "-" in rid else rid
-    s = rec.get("subject", {})
+    s = _dict(rec.get("subject"))
     commit = (s.get("commit") or "")[:7]
     verdict = rec.get("verdict", "INDETERMINATE")
     var = VERDICT_VAR.get(verdict, "--indet")
@@ -462,11 +606,15 @@ def card(rec):
 
     t = tally(rec)
     if t:
+        # The order is written out of OUTCOME_ORDER rather than typed, because
+        # it is the same list verdict_disagrees() checked the record against a
+        # few lines above. Typed, it is a sentence that can drift away from the
+        # rule it describes while both keep rendering.
         out.append('      <div class="why" style="border-left-color:var(--rule)">'
                    '<b>Probe tally.</b> %s. The verdict is the worst outcome '
-                   'observed, in the order FAIL_UNSAFE, FAIL_SAFE, '
-                   'INDETERMINATE, PASS, OUT_OF_SCOPE. It is never an average '
-                   'and never a score.</div>\n' % esc(t))
+                   'observed, in the order %s. It is never an average '
+                   'and never a score.</div>\n'
+                   % (esc(t), esc(", ".join(OUTCOME_ORDER))))
 
     out.append(probe_table(rec))
     out.append('    </div>\n')
@@ -608,10 +756,20 @@ def embargo_block(held):
         % (len(held), "" if len(held) == 1 else "s",
            esc(", ".join(gates).replace("_", " ")))]
 
-    if any(is_withdrawn(r) for _, r in held):
+    # "One of these" was typed, behind an any() that only asked whether there
+    # was at least one. With two withheld withdrawals the header said 4 and the
+    # body said One, so the page carried two different counts of the same set
+    # and neither was compiled from the records. It is the drift this whole
+    # generator exists to make impossible, arrived at through prose instead of
+    # through a number, and prose is where the count is least likely to be
+    # checked. The rest of the paragraph is written to hold for any count, so
+    # there is one version of it rather than a singular and a plural that can
+    # be edited apart.
+    n_wd = sum(1 for _, r in held if is_withdrawn(r))
+    if n_wd:
         out.append(
-            '      <p>One of these is this registry\'s own withdrawn record. '
-            'It is adverse to nobody but us, and it would have published the '
+            '      <p>%s of these %s this registry\'s own withdrawn record%s, '
+            'adverse to nobody but us. Such a record would have published the '
             'day it was written, except that its subject is the same package '
             'as the records now under reply and is the only subject this page '
             'would name at all. Publishing it says that Nobulex is '
@@ -620,7 +778,9 @@ def embargo_block(held):
             'the window exists to prevent, minus everything the maintainer '
             'would need to answer it. It publishes when they do. Nothing was '
             'ever served to a reader who would now be owed the correction, so '
-            'holding it costs that reader nothing.</p>\n')
+            'holding it costs that reader nothing.</p>\n'
+            % ("One" if n_wd == 1 else "%d" % n_wd,
+               "is" if n_wd == 1 else "are", "" if n_wd == 1 else "s"))
 
     out.append(
         '      <p>What a held record found is not stated here, not its '
@@ -717,6 +877,25 @@ def build(preview=False):
     shown = [(p, r) for p, r in visible if not is_withdrawn(r)]
     dead = [(p, r) for p, r in visible if is_withdrawn(r)]
 
+    # Held and withdrawn are two different facts and a record can carry both.
+    # Held describes what the registry may publish yet; withdrawn describes
+    # whether the record still stands. The public note used to add them into
+    # one number: a record that was both fell out of `visible`, so it never
+    # reached `dead`, and it was counted under "issued and held" beside a
+    # sentence reading "A held record is in force: it is issued, its verdict is
+    # fixed". That is asserted, on the public page, about a record this
+    # registry retracted. It is the register overstating its own live findings,
+    # which is precisely the class of claim it publishes verdicts about in
+    # other people's software, and it is live in today's records: one of the
+    # four withheld records is the withdrawn one.
+    #
+    # So the two are counted apart and both are printed. A withheld withdrawal
+    # is disclosed as its own number rather than folded into either the live
+    # holds or the published withdrawals, because collapsing it into one of
+    # them is how it went unnoticed.
+    held_live = [(p, r) for p, r in held if not is_withdrawn(r)]
+    held_dead = [(p, r) for p, r in held if is_withdrawn(r)]
+
     body = []
     if not preview:
         block = embargo_block(held)
@@ -752,15 +931,30 @@ def build(preview=False):
                      'held, so this page carries its rules and its count and '
                      'no subject at all. That is the accurate state of it, '
                      'not an empty template. ')
+        # Each clause below is emitted only when the count it explains is
+        # nonzero, so the page cannot assert "a held record is in force" on a
+        # build where nothing is held and in force.
+        inforce = ""
+        if held_live:
+            inforce = ('A held record is in force: it is issued, its verdict '
+                       'is fixed, and it is waiting on its subject rather '
+                       'than on us. ')
+        retracted = ""
+        if held_dead:
+            retracted = ('A record that is withdrawn and held is not in '
+                         'force. It was retracted, and it is counted on its '
+                         'own line rather than among the records waiting on a '
+                         'reply, because a retraction added to the live holds '
+                         'is this register overstating what it currently '
+                         'finds. ')
         note = ('    <p class="note">%d record%s published, %d issued and '
-                'held, and %d withdrawn and published, compiled from the '
-                'records on every build. %sA held record is in force: it is '
-                'issued, its verdict is fixed, and it is waiting on its '
-                'subject rather than on us. Nothing on this page is typed by '
-                'hand, because the one time it was, it published a subject '
-                'that could not be resolved.</p>\n'
+                'held, %d withdrawn and held, and %d withdrawn and published, '
+                'compiled from the records on every build. %s%s%sNothing on '
+                'this page is typed by hand, because the one time it was, it '
+                'published a subject that could not be resolved.</p>\n'
                 % (len(shown), "" if len(shown) == 1 else "s",
-                   len(held), len(dead), empty))
+                   len(held_live), len(held_dead), len(dead),
+                   empty, inforce, retracted))
     body.append(note)
 
     with io.open(TEMPLATE, encoding="utf-8") as fh:

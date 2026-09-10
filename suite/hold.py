@@ -207,6 +207,32 @@ MANIFEST_PURPOSE = (
     "the accusation while withholding the evidence for it.")
 
 
+def manifest_in_head_state():
+    """Whether HEAD carries a readable manifest: 'absent', 'unreadable', 'ok'.
+
+    Three states, not two. A repository whose first commit has not happened,
+    or which has never committed a manifest, is ABSENT: there is no
+    commitment yet and making one is the ordinary case. A manifest that is
+    present in HEAD and does not parse, or whose held is not a list, is
+    UNREADABLE: a commitment exists and cannot be checked, which is not a
+    licence to overwrite it.
+
+    Collapsing those two into None made the first commit refuse.
+    """
+    rel = os.path.relpath(MANIFEST, ROOT).replace(os.sep, "/")
+    blob = git(["show", "HEAD:%s" % rel])
+    if blob is None:
+        return "absent", None
+    try:
+        m = json.loads(blob)
+    except ValueError:
+        return "unreadable", None
+    if not isinstance(m, dict) or not isinstance(m.get("held"), list):
+        return "unreadable", None
+    return "ok", {r["file"]: r for r in m["held"]
+                  if isinstance(r, dict) and r.get("file")}
+
+
 def manifest_at_head():
     """The manifest as the last commit has it, keyed by file name.
 
@@ -223,7 +249,25 @@ def manifest_at_head():
         return None
     if not isinstance(m, dict):
         return None
-    return {r["file"]: r for r in m.get("held", [])
+    # `held` has to be a list, and this is not pedantry about types. Nothing
+    # checked it, so a manifest whose held was an object keyed by filename
+    # (same information, same hashes, valid JSON, correct schema string)
+    # produced {} here, which is indistinguishable from an empty manifest and
+    # is not None, so every caller took the strong branch.
+    #
+    # Verified end to end: with that manifest in HEAD, a verdict on disk was
+    # flipped from adverse to clean, --commit did NOT refuse (its refusal
+    # iterates head.items(), which was empty), --amend was never needed, and
+    # --verify printed "the manifest matches HEAD" about a manifest it had
+    # failed to parse. The refusal exists so a rewrite has to appear in shell
+    # history; this path removed the trace along with the check.
+    #
+    # None means git or the manifest could not answer, which the callers
+    # already announce as a weaker check. That is the honest state here.
+    held = m.get("held")
+    if not isinstance(held, list):
+        return None
+    return {r["file"]: r for r in held
             if isinstance(r, dict) and r.get("file")}
 
 
@@ -285,6 +329,30 @@ def cmd_commit(amend=False):
     # and in whatever the person writes in the commit message afterwards.
     head = manifest_at_head()
     fresh = {r["file"]: r for r in manifest["held"]}
+    # head is None means the committed manifest could not be read: git did not
+    # answer, or the JSON was not a manifest, or its held was not a list.
+    # Whatever the cause, there is nothing to compare against, so the refusal
+    # below cannot fire and every existing commitment can be overwritten in
+    # silence. Verified: with a manifest in HEAD whose held was an object
+    # rather than a list, a verdict on disk was flipped and --commit rewrote
+    # the manifest and exited 0, no --amend asked for, nothing in the shell
+    # history to show it. The refusal exists precisely to leave that trace.
+    #
+    # An unreadable commitment is not an absent one, and it is not a licence
+    # to replace it.
+    state, _ = manifest_in_head_state()
+    if state == "unreadable" and not amend:
+        sys.stderr.write(
+            "REFUSED: the manifest in HEAD could not be read, so this "
+            "command cannot tell a new commitment from a rewritten one.\n"
+            "  Nothing was written. Either git could not answer, or the\n"
+            "  committed manifest is not shaped like a manifest. Both mean\n"
+            "  the commitments already in history cannot be checked against\n"
+            "  what is on disk, and writing over them would replace them\n"
+            "  without ever showing what was replaced. Fix the manifest in\n"
+            "  HEAD, or if this is deliberate re-run with --amend and say\n"
+            "  in the commit message what changed and why.\n")
+        return 2
     would_rewrite = rewritten_commitments(head, fresh)
     if would_rewrite and not amend:
         sys.stderr.write("REFUSED: this would rewrite a commitment already "
@@ -555,7 +623,55 @@ def disclosure_scan(ids):
             "  and not a cleanup: amend before the first push, or start the\n"
             "  public history fresh, which is what was done here.\n")
 
-    if not leaks and leaks is not None and not said and said is not None:
+    # Fail closed when a scan could not run. Suppressing the clean sentence
+    # was not enough: rc was left at 0, so the caller printed its own louder
+    # summary and the suppression was cosmetic. Verified: with a full leak in
+    # a tracked file and no .git anywhere, every scan returned None and
+    # --verify-export printed "export clean" and exited 0.
+    #
+    # An empty id set is the same failure in a different costume.
+    # message_leaks returns {} without spawning git when ids is empty, and {}
+    # is falsy and not None, so the clean line was printed for a scan that
+    # never ran. cmd_verify_export guards for this; cmd_audit did not, and a
+    # held set consisting only of reply notices carries no ids at all.
+    #
+    # "Could not answer" and "answered no" are different facts. This file
+    # already says so in manifest_at_head's docstring.
+    # Not a git repository at all is a different fact from git refusing to
+    # answer. With no repository nothing is tracked and no commit exists, so
+    # those two scans are vacuous rather than failed and there is nothing for
+    # a clone to carry, because there is nothing to clone. Inside a
+    # repository, a scan that returns None looked at nothing and must not be
+    # reported as having found nothing.
+    in_repo = git(["rev-parse", "--git-dir"]) is not None
+    unran = [n for n, v in (("tracked files", tracked),
+                            ("history", leaks),
+                            ("commit messages", said)) if v is None]
+    if unran and in_repo:
+        sys.stderr.write(
+            "THE DISCLOSURE SCAN COULD NOT RUN:\n"
+            "  no answer from: %s\n"
+            "  This is not a clean result. git could not be read, so nothing\n"
+            "  was established about what this repository would hand a\n"
+            "  stranger. A scan that could not look is reported as a failure\n"
+            "  rather than as a finding of nothing.\n" % ", ".join(unran))
+        return 2
+    # No ids AND nothing held is the ordinary empty state, and it is clean.
+    # No ids WHILE something is held is the dangerous one: every check below
+    # returns empty without looking, and a held set made only of reply notices
+    # produces no identifiers at all, while the notices are the files that
+    # carry the finding in full.
+    if not ids and held_files_in_manifest():
+        sys.stderr.write(
+            "THE DISCLOSURE SCAN HAD NOTHING TO SEARCH FOR:\n"
+            "  the manifest commits to files but supplied no record\n"
+            "  identifiers, so every check below returned empty without\n"
+            "  looking. A held set consisting only of reply notices produces\n"
+            "  no identifiers, and the notices are the files that carry the\n"
+            "  finding in full.\n")
+        return 2
+
+    if not leaks and not said:
         print("no held record is reachable from any commit or named in a "
               "message")
     return rc
@@ -665,13 +781,29 @@ def cmd_verify_export():
     published = published_ids()
     strays = []
     if os.path.isdir(RECORDS):
-        for n in sorted(os.listdir(RECORDS)):
-            if not n.endswith(".json") or n == os.path.basename(MANIFEST):
+        # os.walk, not os.listdir. This read one directory deep, so a record
+        # the renderer never published was invisible one level down and mkdir
+        # was the entire exploit. Verified: an unpublished adverse record
+        # naming a third party, committed at records/drafts/, returned
+        # "export clean" and exit 0, while the same file at the top level was
+        # caught. It has no backstop either, because a record the manifest
+        # does not list contributes no id for the disclosure scan to look for.
+        held_dir = os.path.abspath(HELD)
+        for dirpath, dirnames, filenames in os.walk(RECORDS):
+            if os.path.abspath(dirpath) == held_dir:
+                # The held directory has its own check above, which reports
+                # presence rather than publication. Walking it here would
+                # double-report every held file.
+                dirnames[:] = []
                 continue
-            rid = record_id_of(os.path.join(RECORDS, n))
-            if rid and rid in published:
-                continue
-            strays.append(n)
+            for n in sorted(filenames):
+                if not n.endswith(".json") or n == os.path.basename(MANIFEST):
+                    continue
+                full = os.path.join(dirpath, n)
+                rid = record_id_of(full)
+                if rid and rid in published:
+                    continue
+                strays.append(os.path.relpath(full, RECORDS))
     if present:
         rc = 2
         sys.stderr.write(

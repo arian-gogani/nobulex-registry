@@ -1023,6 +1023,288 @@ gate("gate / no manifest at all is not treated as a commitment to nothing",
      lambda: _rr.missing_held(None, set()) == set(),
      True, "quiet")
 
+# ============ 10c-ii. what the page says about a record, not about the gate
+# The section above tests whether a record reaches the public page. These test
+# what the page then says about the ones that do, which is the other half of
+# the same promise: a register compiled from records is worth more than a
+# hand-written one only if every number and every claim on it is compiled too.
+# Each case below is a defect that rendered, on the real records or on a
+# fixture, and each has a partner asserting the fix did not simply switch the
+# detector off.
+
+import os as _os, shutil as _shutil, tempfile as _tempfile
+import harness as _harness
+
+def _refuses(fn):
+    """True if `fn` fails closed. SystemExit is not an Exception, so a bare
+    `except Exception` in gate() would let it out and end the run."""
+    try:
+        fn()
+    except SystemExit:
+        return True
+    except Exception:
+        return False
+    return False
+
+def _survives(fn):
+    """True if `fn` returns anything at all rather than raising."""
+    try:
+        fn()
+    except BaseException:
+        return False
+    return True
+
+# ---- the upstream pin. An unanchored `name in upstream` published mcp==2.2.0
+# as the pin a FAIL_UNSAFE rides on, because the token mcp occurs inside the
+# subject's own repository URL. mcp is the protocol library.
+_URL = "https://github.com/Alex2Yang97/yahoo-finance-mcp.git"
+_PROSE = "Yahoo Finance, via the yfinance package"
+
+gate("register / mcp is not the upstream of yahoo-finance-mcp.git",
+     lambda: _rr.names_upstream("mcp", _URL), False, "detect")
+
+gate("register / a name is not matched inside a longer hyphenated one",
+     lambda: _rr.names_upstream("finance", _URL), False, "detect")
+
+gate("register / the pin actually named by a git upstream is still found",
+     lambda: _rr.names_upstream("yahoo-finance-mcp", _URL), True, "quiet")
+
+gate("register / a prose upstream still names its package",
+     lambda: _rr.names_upstream("yfinance", _PROSE), True, "quiet")
+
+gate("register / an empty upstream matches nothing",
+     lambda: _rr.names_upstream("yfinance", ""), False, "quiet")
+
+gate("register / a direct reference pin is a name, not a file URL",
+     lambda: _rr.dist_name("yahoo-finance-mcp @ file:///tmp/x/subj")
+     == "yahoo-finance-mcp", True, "detect")
+
+gate("register / an extras pin is a name without its extras",
+     lambda: _rr.dist_name("pkg[all]==1.0") == "pkg", True, "detect")
+
+gate("register / an ordinary pin is still read as its name",
+     lambda: _rr.dist_name("mcp==2.2.0") == "mcp", True, "quiet")
+
+# The whole row, not only the predicate, because the defect was visible on the
+# rendered page and nowhere else.
+_MCP_REC = {"record_id": "NBLX-00000000-801",
+            "subject": {"package": "subj", "upstream": _URL,
+                        "execution_environment": {
+                            "resolved_dependencies": ["mcp==2.2.0",
+                                                      "mcp-types==2.2.0",
+                                                      "yfinance==1.7.0"]}}}
+
+gate("register / the dependency row does not name the protocol library",
+     lambda: "mcp==2.2.0" in _rr.tuple_rows(_MCP_REC), False, "detect")
+
+gate("register / a record whose upstream is prose still names its pin",
+     lambda: "yfinance==1.5.2" in _rr.tuple_rows(
+         {"record_id": "NBLX-00000000-802",
+          "subject": {"package": "subj", "upstream": _PROSE,
+                      "execution_environment": {
+                          "resolved_dependencies": ["mcp==2.0.0",
+                                                    "yfinance==1.5.2"]}}}),
+     True, "quiet")
+
+# ---- the timestamp. day() formatted the datetime as parsed and appended
+# " UTC", so an offset timestamp published the wrong instant and a naive one
+# published a zone the record never stated. These are the Observed and the
+# Valid until lines, which is what a reader uses to decide whether a validity
+# window has closed.
+gate("register / an offset timestamp is converted before it is called UTC",
+     lambda: _rr.day("2026-08-03T13:04:00+02:00") == "2026-08-03 11:04 UTC",
+     True, "detect")
+
+gate("register / a western offset is converted in the other direction too",
+     lambda: _rr.day("2026-08-03T13:04:00-05:00") == "2026-08-03 18:04 UTC",
+     True, "detect")
+
+gate("register / a timestamp with no zone is not labelled UTC",
+     lambda: "UTC" in _rr.day("2026-08-03T13:04:00"), False, "detect")
+
+gate("register / a timestamp with no zone still publishes its digits",
+     lambda: _rr.day("2026-08-03T13:04:00").startswith("2026-08-03 13:04"),
+     True, "quiet")
+
+gate("register / a timestamp already in UTC is unchanged",
+     lambda: _rr.day("2026-08-03T19:33:40.768891+00:00")
+     == "2026-08-03 19:33 UTC", True, "quiet")
+
+gate("register / a Z suffix is read as UTC",
+     lambda: _rr.day("2026-08-03T13:04:00Z") == "2026-08-03 13:04 UTC",
+     True, "quiet")
+
+gate("register / an unparseable timestamp is passed through untouched",
+     lambda: _rr.day("sometime in August") == "sometime in August",
+     True, "quiet")
+
+gate("register / an absent timestamp renders as nothing, not as an epoch",
+     lambda: _rr.day(None) == "", True, "quiet")
+
+# ---- the embargo notice. "One of these" was typed behind an any(), so the
+# header counted the whole set and the body asserted a different number for a
+# subset of it.
+def _withheld(n_withdrawn, n_live):
+    pub = {"status": "HELD", "held_by": "right_of_reply"}
+    out = [("w%d.json" % i, {"record_id": "NBLX-00000000-81%d" % i,
+                             "status": "WITHDRAWN", "publication": pub})
+           for i in range(n_withdrawn)]
+    out += [("l%d.json" % i, {"record_id": "NBLX-00000000-82%d" % i,
+                              "verdict": "FAIL_UNSAFE", "publication": pub})
+            for i in range(n_live)]
+    return out
+
+gate("register / two withheld withdrawals are not announced as one",
+     lambda: "2 of these are this registry's own withdrawn records"
+     in _rr.embargo_block(_withheld(2, 1)), True, "detect")
+
+gate("register / the embargo header and body count the same set",
+     lambda: "One of these" in _rr.embargo_block(_withheld(2, 1)),
+     False, "detect")
+
+gate("register / a single withheld withdrawal still reads as one",
+     lambda: "One of these is this registry's own withdrawn record"
+     in _rr.embargo_block(_withheld(1, 3)), True, "quiet")
+
+gate("register / no withheld withdrawal, no paragraph about one",
+     lambda: "withdrawn record" in _rr.embargo_block(_withheld(0, 3)),
+     False, "quiet")
+
+gate("register / the embargo notice still counts everything it withholds",
+     lambda: "<b>4 records issued and withheld.</b>"
+     in _rr.embargo_block(_withheld(1, 3)), True, "quiet")
+
+# ---- the public note. A record that is both held and withdrawn fell out of
+# `visible`, so it never reached the withdrawn count and was added to the live
+# holds instead, under a sentence asserting that a held record is in force.
+def _note(records):
+    """The public page's closing note, built over a throwaway records tree.
+
+    build() reads two module-level directories, so the fixture is installed by
+    pointing them at a temp tree and restoring them after. No process is
+    started and nothing is written inside the repository: the real template is
+    read, the page is returned in memory, and the caller reads one sentence.
+    """
+    d = _tempfile.mkdtemp(prefix="nbx-note-")
+    held = _os.path.join(d, "held")
+    _os.makedirs(held)
+    for name, obj in records:
+        with open(_os.path.join(held, name), "w", encoding="utf-8") as fh:
+            json.dump(obj, fh)
+    keep = (_rr.RECORDS, _rr.HELD_DIR)
+    try:
+        _rr.RECORDS, _rr.HELD_DIR = d, held
+        html = _rr.build()[0]
+    finally:
+        _rr.RECORDS, _rr.HELD_DIR = keep
+        _shutil.rmtree(d, ignore_errors=True)
+    for line in html.splitlines():
+        if "compiled from the records on every build" in line:
+            return line.strip()
+    return ""
+
+gate("register / a withheld withdrawal is not counted among the live holds",
+     lambda: "1 issued and held, 1 withdrawn and held" in _note(_withheld(1, 1)),
+     True, "detect")
+
+gate("register / a page holding only a retraction does not call it in force",
+     lambda: "A held record is in force" in _note(_withheld(1, 0)),
+     False, "detect")
+
+gate("register / a page holding a live record does say it is in force",
+     lambda: "A held record is in force" in _note(_withheld(0, 2)),
+     True, "quiet")
+
+gate("register / a page holding no retraction does not explain one",
+     lambda: "withdrawn and held is not in force" in _note(_withheld(0, 2)),
+     False, "quiet")
+
+gate("register / the live hold count is still the number of live holds",
+     lambda: "0 records published, 2 issued and held, 0 withdrawn and held"
+     in _note(_withheld(0, 2)), True, "quiet")
+
+# ---- the tally. The page asserts the verdict is the worst outcome observed
+# and nothing computed that, so a PASS record with a FAIL_UNSAFE probe
+# published the claim and its counterexample together.
+def _probed(verdict, outcomes):
+    return {"record_id": "NBLX-00000000-830", "verdict": verdict,
+            "subject": {"package": "subj", "commit": "0123456789ab"},
+            "probes": [{"probe": "P%02d" % i, "outcome": o}
+                       for i, o in enumerate(outcomes)]}
+
+gate("register / a PASS verdict over a FAIL_UNSAFE probe is a contradiction",
+     lambda: bool(_rr.verdict_disagrees(_probed("PASS", ["FAIL_UNSAFE",
+                                                         "PASS"]))),
+     True, "detect")
+
+gate("register / a card that contradicts its own probes is not rendered",
+     lambda: _refuses(lambda: _rr.card(_probed("PASS", ["FAIL_UNSAFE"]))),
+     True, "detect")
+
+gate("register / a FAIL_SAFE verdict over a FAIL_UNSAFE probe is caught too",
+     lambda: bool(_rr.verdict_disagrees(_probed("FAIL_SAFE",
+                                                ["FAIL_UNSAFE", "PASS"]))),
+     True, "detect")
+
+gate("register / an outcome this file cannot rank is not assumed to be worst",
+     lambda: bool(_rr.verdict_disagrees(_probed("PASS", ["SORT_OF_FINE"]))),
+     True, "detect")
+
+gate("register / a record carrying the worst outcome it observed renders",
+     lambda: _rr.verdict_disagrees(_probed("FAIL_UNSAFE",
+                                           ["PASS", "FAIL_UNSAFE", "PASS"])),
+     "", "quiet")
+
+gate("register / FAIL_SAFE beats OUT_OF_SCOPE, as the real record has it",
+     lambda: _rr.verdict_disagrees(_probed("FAIL_SAFE", ["FAIL_SAFE",
+                                                         "OUT_OF_SCOPE"])),
+     "", "quiet")
+
+gate("register / a record with no probes makes no claim to check",
+     lambda: _rr.verdict_disagrees({"record_id": "X", "verdict": "PASS"}),
+     "", "quiet")
+
+# The renderer states the precedence order in prose and checks records against
+# it, while harness.py aggregates probe outcomes with its own copy. Two copies
+# of one rule is the defect this suite keeps finding elsewhere, so the copies
+# are required to be identical rather than trusted to stay that way.
+gate("register / the published precedence order is the one the harness applies",
+     lambda: _rr.OUTCOME_ORDER == list(_harness._ORDER), True, "detect")
+
+# ---- rows, and records that are the wrong shape.
+gate("register / an authority key is escaped once, not twice",
+     lambda: "Authority A&amp;B" in _rr.tuple_rows(
+         {"record_id": "X", "subject": {},
+          "authorities": {"A&B": {"id": "a", "role": "r",
+                                  "independent_of_subject_upstream": True}}}),
+     True, "detect")
+
+gate("register / an authority key is still escaped at all",
+     lambda: "A&B<" in _rr.tuple_rows(
+         {"record_id": "X", "subject": {},
+          "authorities": {"A&B<": {"id": "a", "role": "r",
+                                   "independent_of_subject_upstream": True}}}),
+     False, "quiet")
+
+gate("register / an explicitly null subject does not take the build down",
+     lambda: _survives(lambda: _rr.tuple_rows({"record_id": "X",
+                                               "subject": None})),
+     True, "detect")
+
+gate("register / a null subject does not take the card down either",
+     lambda: _survives(lambda: _rr.card({"record_id": "X", "subject": None})),
+     True, "detect")
+
+gate("register / a subject that is not an object at all is survivable",
+     lambda: _survives(lambda: _rr.card({"record_id": "X",
+                                         "subject": "yahoo-finance-mcp"})),
+     True, "detect")
+
+gate("register / a real subject is still rendered into the tuple",
+     lambda: "some-server" in _rr.tuple_rows(
+         {"record_id": "X", "subject": {"package": "some-server"}}),
+     True, "quiet")
+
 # ======================= 10d. the export guard, on a throwaway repository
 #
 # The record ids below are deliberately fictional. The first draft of this
