@@ -66,6 +66,15 @@ CONFIG = {
         "tolerance, not a market-movement tolerance. Both sides read the same "
         "upstream, so any deviation beyond rounding is introduced in transit.",
     "freshness_max_calendar_days": 5,
+    "freshness_max_future_days": 2,
+    "freshness_max_future_note": "A bar dated ahead of the run describes a "
+        "session that has not happened. Two days of slack rather than zero, "
+        "because a session on an exchange ahead of UTC can carry tomorrow's "
+        "date while the harness clock still reads today, and a tighter bound "
+        "would fail a correct tool for being in Asia. Past that there is no "
+        "timezone that explains it. This is not staleness inverted: a stale "
+        "bar discloses its own age in the date it carries, while a future bar "
+        "is a value that nothing observed, which is fabricated_field.",
     "fidelity_min_overlap_frac": 0.5,
     "fidelity_min_overlap_note": "Matched dates must cover at least half of the "
         "smaller side, and at least two sessions, before any value comparison is "
@@ -836,7 +845,22 @@ def classify_monotonic(bars):
                 "dates are not strictly increasing")
     return PASS, None, f"{len(ds)} dates strictly increasing"
 
-def classify_freshness(bars, now_utc, max_days):
+def classify_freshness(bars, now_utc, max_days, max_future_days=None):
+    """Probe: is the most recent bar recent, and does it exist yet.
+
+    The second half was missing and is not a variant of the first. `age` is
+    signed, so a bar dated ahead of the run produced a negative age, `age >
+    max_days` was false, and the probe returned PASS. Bars dated a year out
+    passed this, passed classify_monotonic because they were ordered, and
+    passed classify_ohlc because their values were internally consistent. A
+    tool emitting future sessions from a date bug or an undisclosed synthetic
+    fallback collected a clean sweep, which is the exact shape this registry
+    exists to catch: well formed, plausible, materially wrong, no signal.
+
+    Staleness and future-dating are graded apart because they are different
+    claims. A stale bar is a real observation that is old, and it discloses
+    its own age in the date it carries. A future bar was observed by nobody,
+    so it is fabricated_field rather than stale_value."""
     if not bars:
         return INDETERMINATE, None, "no bars"
     ds = sorted(str(b.get("Date", ""))[:10] for b in bars if b.get("Date"))
@@ -847,6 +871,14 @@ def classify_freshness(bars, now_utc, max_days):
     except Exception:
         return INDETERMINATE, None, f"unparseable date {ds[-1]}"
     age = (now_utc - latest).days
+    if max_future_days is None:
+        max_future_days = CONFIG["freshness_max_future_days"]
+    if age < -max_future_days:
+        return (FAIL_UNSAFE, "fabricated_field",
+                f"most recent bar is dated {ds[-1]}, {-age} calendar days "
+                f"ahead of the run, past the {max_future_days} day pinned "
+                f"allowance for exchanges ahead of UTC. A bar dated after the "
+                f"run describes a session that has not happened")
     if age > max_days:
         return (FAIL_UNSAFE, "stale_value",
                 f"most recent bar is {ds[-1]}, {age} calendar days old, past the "

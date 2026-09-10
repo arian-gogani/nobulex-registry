@@ -389,6 +389,52 @@ check("freshness / undated payload resolves to INDETERMINATE not PASS",
                          CONFIG["freshness_max_calendar_days"]),
       INDETERMINATE, None, "quiet")
 
+# A bar dated after the run. `age` is signed, so before this was graded the
+# comparison `age > max_days` was false for every future date and the probe
+# returned PASS. Bars dated a year out also passed classify_monotonic, because
+# they were ordered, and classify_ohlc, because their values were internally
+# consistent. A tool emitting future sessions from a date bug or an
+# undisclosed synthetic fallback swept every probe in the suite.
+#
+# NOW is 2026-08-03, so these are relative to that and not to the wall clock.
+future_far = [bar("2027-08-03", 1, 2, 0.5, 1.5)]
+check("freshness / a bar dated a year ahead is not fresh, it is fabricated",
+      classify_freshness(future_far, NOW,
+                         CONFIG["freshness_max_calendar_days"]),
+      FAIL_UNSAFE, "fabricated_field", "detect")
+
+future_week = [bar("2026-08-10", 1, 2, 0.5, 1.5)]
+check("freshness / a week ahead is past any timezone explanation",
+      classify_freshness(future_week, NOW,
+                         CONFIG["freshness_max_calendar_days"]),
+      FAIL_UNSAFE, "fabricated_field", "detect")
+
+# The must-not-fire half. An exchange ahead of UTC can carry tomorrow's date
+# while the harness clock still reads today. Failing that is a false
+# FAIL_UNSAFE against a correct tool, which is the worst output this harness
+# can produce, so the slack is pinned rather than zero.
+future_slack = [bar("2026-08-05", 1, 2, 0.5, 1.5)]
+check("freshness / two days ahead is inside the pinned timezone allowance",
+      classify_freshness(future_slack, NOW,
+                         CONFIG["freshness_max_calendar_days"]),
+      PASS, None, "quiet")
+
+future_tomorrow = [bar("2026-08-04", 1, 2, 0.5, 1.5)]
+check("freshness / a session dated tomorrow on an exchange ahead of UTC passes",
+      classify_freshness(future_tomorrow, NOW,
+                         CONFIG["freshness_max_calendar_days"]),
+      PASS, None, "quiet")
+
+# Direction matters. Future-dating is fabricated_field and staleness is
+# stale_value, and collapsing them would put a value nobody observed under a
+# cause that says the observation was merely old.
+_fut_cause = classify_freshness(future_far, NOW,
+                                CONFIG["freshness_max_calendar_days"])[1]
+_results.append((_fut_cause == "fabricated_field", "detect",
+                 "freshness / a future bar is fabricated_field, never stale_value",
+                 _fut_cause, None, "fabricated_field", None,
+                 "a value nobody observed is not an observation that aged"))
+
 # ======================================================= 8. wrong_entity
 check("entity / subject names a different registrant",
       classify_entity(json.dumps({"longName": "Banco Santander SA"}),
