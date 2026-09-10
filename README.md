@@ -8,6 +8,18 @@ Starting with financial data, where correctness is checkable against an authorit
 
 The argument underneath this, including what would make it wrong, is in [THESIS.md](THESIS.md).
 
+[Public register](https://nobulex.com/register) · [Methodology](https://nobulex.com/methodology) · [What would make this wrong](THESIS.md)
+
+Run the part that decides whether a verdict means anything:
+
+```bash
+git clone https://github.com/arian-gogani/nobulex-registry.git
+cd nobulex-registry
+python3 suite/selftest.py
+```
+
+No package install is required for the self-test. If you find a corrupted response it calls clean, open an issue with the smallest reproduction you can make. If you want to follow the work, star the repository.
+
 ---
 
 ## The failure this exists for
