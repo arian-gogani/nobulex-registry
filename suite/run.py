@@ -26,6 +26,7 @@ from harness import (
     a1_chart, a2_edgar, AuthorityUnavailable,
     PASS, FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, OUT_OF_SCOPE,
     classify_absent_entity, classify_empty_window, classify_invalid_argument,
+    classify_padded_argument,
     classify_window_span,
     classify_fidelity, classify_ohlc, classify_monotonic, classify_freshness,
     classify_entity, classify_channel, classify_truncation,
@@ -558,14 +559,36 @@ def main():
             # it arrives from a config file, an environment variable, or a
             # spreadsheet cell. If ' 1mo ' and '1mo' disagree, the disagreement
             # should be audible.
-            req = {"ticker": LIVE_TICKER, "period": "1mo ", "interval": "1d"}
-            text, is_err, _ = client.call(hist, req)
-            parsed, _ = parse_bars(text)
-            o, c, d = classify_invalid_argument(text, is_err, parsed,
-                                                "period='1mo ' (trailing space)")
-            return o, c, d, text
-        r.guard("P11", "whitespace-padded argument from a config source", p11,
-                {"tool": hist, "period": "1mo "})
+            #
+            # That is what this always said and it is not what it did. The
+            # padded call went to classify_invalid_argument, whose contract is
+            # that the presence of data is itself the evidence, and that
+            # contract holds only for an argument no reading can honor.
+            # Whitespace has an obvious reading. A tool that strips it and
+            # serves one month is correct, and it was being graded
+            # FAIL_UNSAFE unsignaled_fallback for it.
+            #
+            # The control the comment implied is now actually fetched, on the
+            # same pattern P03 uses, so the finding rests on an observed
+            # difference between the two responses rather than on the mere
+            # existence of one.
+            padded_text, padded_err, _ = client.call(
+                hist, {"ticker": LIVE_TICKER, "period": "1mo ",
+                       "interval": "1d"})
+            padded_bars, _ = parse_bars(padded_text)
+            base_text, base_err, _ = client.call(
+                hist, {"ticker": LIVE_TICKER, "period": "1mo",
+                       "interval": "1d"})
+            base_bars, _ = parse_bars(base_text)
+            o, c, d = classify_padded_argument(
+                padded_text, padded_err, padded_bars,
+                base_text, base_err, base_bars,
+                "period='1mo ' (trailing space)")
+            return o, c, d, padded_text
+        r.guard("P11", "whitespace-padded argument against its unpadded "
+                       "control", p11,
+                {"tool": hist, "period": "1mo ",
+                 "control": "period='1mo' on the same entity"})
 
         # live pull, reused by P04 through P08 ------------------------------
         # The failure used to be swallowed whole: `except Exception: pass`,
@@ -739,8 +762,8 @@ def main():
             # failing to say what it is withholding, which is the defect this
             # project exists to name. See suite/hold.py, which reports "unstated"
             # rather than inventing a status, and was how this gap was found.
-            "status": "HELD" if verdict in REQUIRES_REPLY else "PUBLISHABLE",
-            "held_by": "right_of_reply" if verdict in REQUIRES_REPLY else None,
+            "status": "HELD" if verdict in (FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE) else "PUBLISHABLE",
+            "held_by": "right_of_reply" if verdict in (FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE) else None,
             "right_of_reply": ({
                 "required": True,
                 "rule": "Before any record with an adverse finding is published, the "
@@ -756,7 +779,7 @@ def main():
                 "window_closes_at": None,
                 "reply_received_at": None,
                 "reply": None,
-            } if verdict in REQUIRES_REPLY else None),
+            } if verdict in (FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE) else None),
         },
         "validity": _validity_block(started, verdict),
         "authorities": {k: dict(CONFIG["authorities"][k], **auth_status.get(k, {}))

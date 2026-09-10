@@ -32,6 +32,7 @@ from harness import (
     PASS, FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, OUT_OF_SCOPE,
     aggregate, parse_bars, CONFIG, next_in_sequence,
     classify_absent_entity, classify_empty_window, classify_invalid_argument,
+    classify_padded_argument,
     classify_window_span,
     classify_fidelity, classify_ohlc, classify_monotonic, classify_freshness,
     classify_entity, classify_channel, classify_truncation,
@@ -393,6 +394,62 @@ check("fidelity / thin overlap resolves to INDETERMINATE not a verdict",
           ("2026-01-05", 11.0), ("2026-01-06", 12.0),
           ("2026-01-07", 13.0), ("2026-01-08", 14.0)]), TOL),
       INDETERMINATE, None, "quiet")
+
+# ============================ 4b. a padded argument is not an unhonorable one
+# P11 sent period='1mo ' and judged the answer with classify_invalid_argument,
+# whose contract is that the presence of data is itself the evidence. That
+# contract holds only when no reading of the argument makes data a correct
+# answer. A trailing space has an obvious reading, and a tool that strips it
+# and serves one month is CORRECT, so the probe returned FAIL_UNSAFE
+# unsignaled_fallback, "which has no valid interpretation", against
+# essentially every well-behaved subject.
+#
+# The probe's own comment always described the honest test: if the padded and
+# unpadded forms disagree, the disagreement should be audible. It never
+# fetched the unpadded form. Now it does, and the finding rests on an observed
+# difference rather than on the mere existence of a response.
+
+def _pbars(n, start=1):
+    return [{"Date": "2026-09-%02d" % (i + start), "Open": 1, "High": 2,
+             "Low": 0.5, "Close": 1.5} for i in range(n)]
+_PJ = lambda b: json.dumps(b)
+_ARG = "period='1mo ' (trailing space)"
+
+# must not fire: every one of these is a correct tool.
+check("padded / stripping the space and serving the same window is correct",
+      classify_padded_argument(_PJ(_pbars(23)), False, _pbars(23),
+                               _PJ(_pbars(23)), False, _pbars(23), _ARG),
+      PASS, None, "quiet")
+
+check("padded / refusing a padded argument outright is also correct",
+      classify_padded_argument(None, True, None,
+                               _PJ(_pbars(23)), False, _pbars(23), _ARG),
+      PASS, None, "quiet")
+
+# detect: the two shapes that are actually a silent substitution.
+check("padded / serving a different number of sessions is a substitution",
+      classify_padded_argument(_PJ(_pbars(5)), False, _pbars(5),
+                               _PJ(_pbars(23)), False, _pbars(23), _ARG),
+      FAIL_UNSAFE, "unsignaled_fallback", "detect")
+
+check("padded / serving a shifted window of the same size is one too",
+      classify_padded_argument(_PJ(_pbars(23, 1)), False, _pbars(23, 1),
+                               _PJ(_pbars(23, 2)), False, _pbars(23, 2), _ARG),
+      FAIL_UNSAFE, "unsignaled_fallback", "detect")
+
+# no control, no claim. Without the unpadded fetch there is nothing to
+# compare against, and inferring a fallback from the response alone is the
+# defect this section exists for.
+check("padded / an unreadable control issues no claim in either direction",
+      classify_padded_argument(_PJ(_pbars(23)), False, _pbars(23),
+                               None, False, None, _ARG),
+      INDETERMINATE, None, "quiet")
+
+check("padded / a prose refusal is FAIL_SAFE, not a silent fallback",
+      classify_padded_argument("invalid period", False, None,
+                               _PJ(_pbars(23)), False, _pbars(23), _ARG),
+      FAIL_SAFE, None, "quiet")
+
 
 # =================================================== 5. fabricated_field OHLC
 broken = [dict(b) for b in CLEAN_BARS]

@@ -553,6 +553,73 @@ def classify_invalid_argument(text, is_error, parsed, arg_desc):
                 f"accepted {arg_desc} and returned an empty array with no signal")
     return INDETERMINATE, None, "unclassifiable response"
 
+def classify_padded_argument(padded_text, padded_err, padded_bars,
+                             base_text, base_err, base_bars, arg_desc):
+    """Probe: does a whitespace-padded argument quietly serve something else?
+
+    THE PRECONDITION THIS EXISTS TO HONOR, and why it is not a variant of
+    classify_invalid_argument.
+
+    A trailing space is not an argument with no valid interpretation. It has
+    one, it is obvious, and it is the one every reasonable tool applies:
+    strip it. A tool that strips '1mo ' and serves one month is CORRECT.
+
+    Routing this through classify_invalid_argument asserted the opposite. That
+    classifier's contract is that the presence of data is itself the evidence,
+    which is only sound when no reading of the argument makes data a correct
+    answer. Whitespace fails that test completely, so the probe returned
+    FAIL_UNSAFE unsignaled_fallback, "which has no valid interpretation",
+    against essentially every well-behaved subject. Published, that is an
+    accusation of a silent fallback levelled at a maintainer whose tool did
+    the ordinary right thing, and a false FAIL_UNSAFE against a correct tool
+    is the worst output this harness can produce.
+
+    The probe's own comment always described the honest test: if the padded
+    and unpadded forms disagree, the disagreement should be audible. It just
+    never fetched the unpadded form to compare against. This does, so the
+    finding rests on an observed difference rather than on an inference from
+    the mere existence of a response.
+
+    Refusal is a pass. Strictly rejecting a malformed argument is a legitimate
+    design, and so is tolerating it. Only silently serving something DIFFERENT
+    while reporting success is the failure."""
+    if padded_err:
+        return (PASS, None,
+                f"refused {arg_desc} through the error channel. Strict "
+                f"rejection of a padded argument is a legitimate design")
+    if padded_text and re.search(r"invalid|not a valid|must be one of",
+                                 padded_text, re.I):
+        return (FAIL_SAFE, None,
+                f"declined {arg_desc} in prose on the success channel rather "
+                f"than through isError, so a programmatic caller must string "
+                f"match to notice")
+    if base_err or base_bars is None:
+        return (INDETERMINATE, None,
+                f"the unpadded control could not be read, so there is nothing "
+                f"to compare {arg_desc} against and no claim is issued")
+    if padded_bars is None:
+        return (INDETERMINATE, None,
+                f"the response to {arg_desc} was not the documented record "
+                f"array, so it could not be compared to the unpadded control")
+
+    def shape(bars):
+        return (len(bars),
+                tuple(sorted(str(b.get("Date", ""))[:10]
+                             for b in bars if isinstance(b, dict))))
+
+    p, b = shape(padded_bars), shape(base_bars)
+    if p == b:
+        return (PASS, None,
+                f"{arg_desc} and the unpadded control returned the same "
+                f"{p[0]} sessions over the same dates, so the padding was "
+                f"tolerated and nothing was substituted")
+    return (FAIL_UNSAFE, "unsignaled_fallback",
+            f"{arg_desc} returned {p[0]} sessions where the unpadded control "
+            f"returned {b[0]}, and the served dates differ, with success "
+            f"reported both times. The caller believes it received the window "
+            f"it asked for")
+
+
 def classify_window_span(text, is_error, parsed, requested_days, arg_desc,
                          available_days=None, tol_frac=0.10):
     """Probe: did the subject serve less than it had, and say nothing?
