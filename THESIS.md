@@ -76,7 +76,9 @@ Neither mitigation is complete. Both are stated, because a limit that has been n
 
 These are constraints rather than preferences, and each one has a corpse behind it.
 
-The rated party cannot buy its verdict. Issuer pays destroyed the credit rating agencies, and it would destroy this faster, because this project has no regulatory moat to survive on afterwards. Revenue comes from relying parties. The one bounded exception, a maintainer funded re test of a subject already in the register, is described in the README and carries three mandatory conditions on the record itself.
+The rated party cannot buy its verdict or a re-test of its own tool. Revenue comes from the party relying on the verification. Maintainers can submit fixes and evidence for review, but cannot fund their own re-test; re-tests follow the published methodology with the same funding separation.
+
+Correction: this thesis previously allowed a maintainer-funded re-test. That exception contradicted the buyer-funded policy and has been removed, matching the README. This corrects the stated policy; it is not evidence that any paid re-test took place. Funding separation alone does not establish independence: the evidence and method must also be checkable.
 
 No consulting or remediation for a rated party. That separation exists in financial auditing because the combination proved unmanageable, not because it was unpleasant.
 
