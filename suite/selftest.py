@@ -553,6 +553,37 @@ check("freshness / undated payload resolves to INDETERMINATE not PASS",
 # undisclosed synthetic fallback swept every probe in the suite.
 #
 # NOW is 2026-08-03, so these are relative to that and not to the wall clock.
+# Dates a lexical sort cannot order. classify_monotonic already refuses these
+# and says why: a string sort is chronological for ISO 8601 and nothing else.
+# This probe took the last element of the same lexical sort and called it the
+# most recent bar, and strptime is lenient about zero padding, so an unpadded
+# date was accepted after being sorted to the wrong end.
+#
+# It failed toward an accusation. '2026-1-5' sorts after '2026-09-09' because
+# '1' > '0' at the fifth character, and the probe returned FAIL_UNSAFE
+# stale_value reading "most recent bar is 2026-1-5, 248 calendar days old"
+# about a payload whose newest bar was the day before. NOW here is 2026-08-03.
+_unpadded = [{"Date": "2026-08-01"}, {"Date": "2026-08-02"}, {"Date": "2026-1-5"}]
+check("freshness / an unpadded date sorted to the wrong end is not staleness",
+      classify_freshness(_unpadded, NOW,
+                         CONFIG["freshness_max_calendar_days"]),
+      INDETERMINATE, None, "detect")
+
+# And the other direction: a date this probe cannot read at all sorted to the
+# front and was silently dropped, so the probe passed while reporting on a
+# payload it had only partly read.
+_slash = [{"Date": "2026-08-02"}, {"Date": "08/02/2026"}]
+check("freshness / an unreadable date is not silently dropped into a pass",
+      classify_freshness(_slash, NOW, CONFIG["freshness_max_calendar_days"]),
+      INDETERMINATE, None, "detect")
+
+# must not fire: a full ISO timestamp truncates to an ISO date and is fine,
+# and both real verdicts still have to be reachable.
+_isots = [{"Date": "2026-08-01T00:00:00Z"}, {"Date": "2026-08-02T00:00:00Z"}]
+check("freshness / an ISO timestamp still resolves to an ISO date",
+      classify_freshness(_isots, NOW, CONFIG["freshness_max_calendar_days"]),
+      PASS, None, "quiet")
+
 future_far = [bar("2027-08-03", 1, 2, 0.5, 1.5)]
 check("freshness / a bar dated a year ahead is not fresh, it is fabricated",
       classify_freshness(future_far, NOW,

@@ -927,6 +927,29 @@ def classify_freshness(bars, now_utc, max_days, max_future_days=None):
     ds = sorted(str(b.get("Date", ""))[:10] for b in bars if b.get("Date"))
     if not ds:
         return INDETERMINATE, None, "no parseable dates"
+    # The same rule classify_monotonic already states: a string sort is
+    # chronological for ISO 8601 and for nothing else. This probe took the
+    # last element of a lexical sort and called it the most recent bar, and
+    # strptime is lenient about zero padding, so an unpadded date was accepted
+    # after being sorted to the wrong end.
+    #
+    # It failed toward an accusation. '2026-1-5' sorts after '2026-09-09'
+    # because '1' > '0' at the fifth character, strptime read it as 5 January,
+    # and the probe returned FAIL_UNSAFE stale_value reading "most recent bar
+    # is 2026-1-5, 248 calendar days old" about a payload whose newest bar was
+    # the previous day. It failed the other way too: a date this probe could
+    # not read at all, '09/09/2026', sorted to the front and was silently
+    # dropped, and the probe passed while reporting on a payload it had only
+    # partly read.
+    #
+    # A payload whose dates cannot be ordered chronologically supports no
+    # freshness claim in either direction.
+    bad = [d for d in ds if not ISO_DATE.match(d)]
+    if bad:
+        return (INDETERMINATE, None,
+                f"{len(bad)} of {len(ds)} dates are not ISO 8601 "
+                f"(first: {bad[0]!r}), so a lexical sort does not establish "
+                f"which bar is the most recent and no freshness claim is made")
     try:
         latest = datetime.strptime(ds[-1], "%Y-%m-%d").replace(tzinfo=timezone.utc)
     except Exception:
