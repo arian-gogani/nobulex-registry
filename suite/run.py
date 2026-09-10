@@ -35,6 +35,42 @@ VALIDITY_DAYS = 7
 LIVE_TICKER = "AAPL"
 ABSENT_TICKER = "ZZZZQQ"
 
+# Any verdict that gets HELD behind right of reply (see the publication block
+# below and hold.py) is gated by a process that itself takes up to seven days
+# to even begin: nothing here starts that clock, a person has to deliver the
+# artifact. A validity window computed from the moment of observation runs
+# out before the reply process has a chance to start, let alone finish.
+# Records already held in this registry did exactly this: they reached their
+# validity deadline while still sitting at artifact_delivered_at=null,
+# which is to say before their subject had been written to. This set must
+# match the HELD condition in the publication block, not just the two FAIL
+# verdicts: INDETERMINATE is held too, and a mismatch here would leave
+# INDETERMINATE records with the same self-defeating deadline. For a held
+# verdict, this leaves "until" unset rather than issuing a deadline the
+# record cannot possibly meet. The clock starts once
+# publication.right_of_reply.window_closes_at exists.
+REQUIRES_REPLY = {FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE}
+
+
+def _validity_block(started, verdict):
+    if verdict not in REQUIRES_REPLY:
+        return {
+            "from": started.isoformat(),
+            "until": (started + timedelta(days=VALIDITY_DAYS)).isoformat(),
+            "note": "Queried outside this window the record returns EXPIRED "
+                    "regardless of verdict.",
+        }
+    return {
+        "from": started.isoformat(),
+        "until": None,
+        "note": "This verdict is adverse and gated by right of reply. The "
+                f"{VALIDITY_DAYS}-day validity window has not started: "
+                "starting it at observation time instead of disclosure time "
+                "let earlier records expire before their reply window had "
+                "opened. This record's window starts when "
+                "publication.right_of_reply.window_closes_at is set.",
+    }
+
 
 class SubjectDidNotStart(Exception):
     """Control flow only. A subject that never completes initialize cannot be
@@ -697,12 +733,32 @@ def main():
             "suite": SUITE_VERSION,
             "observed_at": started.isoformat(),
         },
-        "validity": {
-            "from": started.isoformat(),
-            "until": (started + timedelta(days=VALIDITY_DAYS)).isoformat(),
-            "note": "Queried outside this window the record returns EXPIRED "
-                    "regardless of verdict.",
+        "publication": {
+            # An adverse verdict cannot leave this runner without declaring the gate
+            # holding it. A held record whose status is unstated is the register
+            # failing to say what it is withholding, which is the defect this
+            # project exists to name. See suite/hold.py, which reports "unstated"
+            # rather than inventing a status, and was how this gap was found.
+            "status": "HELD" if verdict in REQUIRES_REPLY else "PUBLISHABLE",
+            "held_by": "right_of_reply" if verdict in REQUIRES_REPLY else None,
+            "right_of_reply": ({
+                "required": True,
+                "rule": "Before any record with an adverse finding is published, the "
+                        "maintainer of the subject receives the full run artifact and has "
+                        "seven days to respond. The reply publishes alongside the record, "
+                        "unedited, and cannot alter the verdict. Only a new run under newly "
+                        "pinned conditions produces a new verdict.",
+                "recipient": "maintainer of " + args.upstream,
+                "notice": None,
+                "artifact_delivered_at": None,
+                "delivery_url": None,
+                "window_days": 7,
+                "window_closes_at": None,
+                "reply_received_at": None,
+                "reply": None,
+            } if verdict in REQUIRES_REPLY else None),
         },
+        "validity": _validity_block(started, verdict),
         "authorities": {k: dict(CONFIG["authorities"][k], **auth_status.get(k, {}))
                         for k in CONFIG["authorities"]},
         "pinned_config": {k: v for k, v in CONFIG.items() if k != "authorities"},
