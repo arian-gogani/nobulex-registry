@@ -503,16 +503,25 @@ def main():
         r.guard("P01", "nonexistent ticker", p01,
                 {"tool": hist, "ticker": ABSENT_TICKER})
 
-        # P02 invalid interval --------------------------------------------
+        # P02 uninterpretable interval -------------------------------------
         def p02():
-            req = {"ticker": LIVE_TICKER, "period": "5d", "interval": "7q"}
+            # The argument has to have NO reading, not merely be undocumented.
+            # classify_invalid_argument's precondition says exactly that, and
+            # this probe violated it twice over: it sent an interval that
+            # reads as a number of quarters, and its own description called it
+            # "outside the documented enumeration", which is the phrase the
+            # precondition forbids word for word. A subject that honors it and
+            # serves data was graded FAIL_UNSAFE unsignaled_fallback for doing
+            # something defensible, the same false accusation P11 was making.
+            req = {"ticker": LIVE_TICKER, "period": "5d",
+                   "interval": "banana"}
             text, is_err, _ = client.call(hist, req)
             parsed, _ = parse_bars(text)
             o, c, d = classify_invalid_argument(text, is_err, parsed,
-                                                "interval='7q'")
+                                                "interval='banana'")
             return o, c, d, text
-        r.guard("P02", "interval outside the documented enumeration", p02,
-                {"tool": hist, "interval": "7q"})
+        r.guard("P02", "interval with no valid interpretation", p02,
+                {"tool": hist, "interval": "banana"})
 
         # P03 oversized window --------------------------------------------
         def p03():

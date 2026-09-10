@@ -608,6 +608,28 @@ def classify_padded_argument(padded_text, padded_err, padded_bars,
                              for b in bars if isinstance(b, dict))))
 
     p, b = shape(padded_bars), shape(base_bars)
+    # Empty against a control that served is its own cause. The two held
+    # records that carry this probe both landed here, and calling it a
+    # fallback would describe a substitution that did not happen: nothing was
+    # served in place of the window, nothing was served at all. silent_empty
+    # is what that is, and it is the cause those records already name.
+    if b[0] == 0:
+        # The control served nothing either, so the padding made no observable
+        # difference and there is no baseline to compare against. Reporting
+        # PASS here would read "the same 0 sessions over the same dates",
+        # which is a pass asserting an agreement between two absences. The
+        # subject's failure on the unpadded request is P04 through P08's to
+        # describe, not this probe's.
+        return (INDETERMINATE, None,
+                f"the unpadded control returned no sessions either, so the "
+                f"padding made no observable difference and this probe "
+                f"establishes nothing about {arg_desc}")
+    if p[0] == 0 and b[0] > 0:
+        return (FAIL_UNSAFE, "silent_empty",
+                f"{arg_desc} returned an empty array with no signal, where "
+                f"the unpadded control returned {b[0]} sessions. The padding "
+                f"has an obvious reading and the subject reported success "
+                f"while honoring neither it nor the argument under it")
     if p == b:
         return (PASS, None,
                 f"{arg_desc} and the unpadded control returned the same "
