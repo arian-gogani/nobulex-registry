@@ -1410,6 +1410,293 @@ _seq("gaps do not lower the next number",
      "19990103", "NBLX-19990103-008", "detect")
 
 
+# ---------------------------------------------------------------- 11. the gate
+# Publication is the only irreversible act here, so the command that performs
+# it gets planted failures rather than a walkthrough. Each case below builds a
+# record in a throwaway tree, asks hold.py to clear it, and checks the answer.
+#
+# The must-not-fire half matters as much as the detect half. A gate that
+# refuses everything is not a gate, it is a wall, and it would have shipped
+# looking correct: the register was empty either way, so "nothing published"
+# could not tell a working gate from a stuck one. That is how the defect this
+# section exists for survived. run.py wrote PUBLISHABLE, render_register.py
+# published only CLEARED or PUBLISHED, no command turned one into the other,
+# and the register was structurally unable to ever carry a record no matter
+# how many subjects passed.
+from datetime import timedelta as _td
+
+def _clear_fixture(root, rid, pub, withdrawn=False):
+    _os.makedirs(_os.path.join(root, "records", "held"), exist_ok=True)
+    held = pub.get("status") == "HELD"
+    d = (_os.path.join(root, "records", "held") if held
+         else _os.path.join(root, "records"))
+    rec = {"schema": "record-v0.4", "record_id": rid,
+           "verdict": "FAIL_UNSAFE" if held else "PASS",
+           "publication": pub,
+           "validity": {"from": None, "until": None}}
+    if withdrawn:
+        rec["status"] = "WITHDRAWN"
+    with _io.open(_os.path.join(d, rid + ".json"), "w", encoding="utf-8") as fh:
+        _json.dump(rec, fh)
+
+def _try_clear(rid, pub, withdrawn=False):
+    root = _tmp.mkdtemp(prefix="nblx-clear-")
+    saved = _point_hold_at(root)
+    try:
+        _clear_fixture(root, rid, pub, withdrawn)
+        return _quiet(_hold.cmd_clear, rid)
+    finally:
+        (_hold.ROOT, _hold.RECORDS, _hold.HELD, _hold.MANIFEST,
+         _hold.REGISTER) = saved
+        _sh.rmtree(root, ignore_errors=True)
+
+def _gate(name, rid, pub, want_rc, kind, withdrawn=False):
+    got = _try_clear(rid, pub, withdrawn)
+    _results.append((got == want_rc, kind, name, got, None, want_rc, None,
+                     "status=%r" % (pub.get("status"),)))
+
+def _ror(**kw):
+    return dict({"required": True, "artifact_delivered_at": None,
+                 "window_closes_at": None, "reply_received_at": None}, **kw)
+
+_now = datetime.now(timezone.utc)
+_past = (_now - _td(days=2)).isoformat()
+_future = (_now + _td(days=5)).isoformat()
+_long_ago = (_now - _td(days=9)).isoformat()
+
+_gate("an adverse record nobody delivered does not clear",
+      "NBLX-19990101-001",
+      {"status": "HELD", "held_by": "right_of_reply", "right_of_reply": _ror()},
+      1, "detect")
+
+_gate("an adverse record whose reply window is still open does not clear",
+      "NBLX-19990101-002",
+      {"status": "HELD", "held_by": "right_of_reply",
+       "right_of_reply": _ror(artifact_delivered_at=_past,
+                              window_closes_at=_future)},
+      1, "detect")
+
+_gate("a delivered record with no stated deadline does not clear",
+      "NBLX-19990101-003",
+      {"status": "HELD", "held_by": "right_of_reply",
+       "right_of_reply": _ror(artifact_delivered_at=_past)},
+      1, "detect")
+
+_gate("a withdrawn record does not come back by clearing it",
+      "NBLX-19990101-004",
+      {"status": "HELD", "held_by": "right_of_reply",
+       "right_of_reply": _ror(artifact_delivered_at=_long_ago,
+                              window_closes_at=_past)},
+      1, "detect", withdrawn=True)
+
+_gate("clearing something already cleared is refused, not repeated",
+      "NBLX-19990101-005", {"status": "CLEARED"}, 1, "detect")
+
+_gate("a non-adverse record clears",
+      "NBLX-19990101-006",
+      {"status": "PUBLISHABLE", "held_by": None, "right_of_reply": None},
+      0, "quiet")
+
+_gate("an adverse record past a closed window clears",
+      "NBLX-19990101-007",
+      {"status": "HELD", "held_by": "right_of_reply",
+       "right_of_reply": _ror(artifact_delivered_at=_long_ago,
+                              window_closes_at=_past)},
+      0, "quiet")
+
+# The point of the whole section. Without this the cases above could all pass
+# while the gate still opened onto a wall, which is exactly what shipped.
+def _cleared_record_reaches_the_register():
+    root = _tmp.mkdtemp(prefix="nblx-clear-")
+    saved = _point_hold_at(root)
+    try:
+        _clear_fixture(root, "NBLX-19990101-008",
+                       {"status": "PUBLISHABLE", "held_by": None,
+                        "right_of_reply": None})
+        _quiet(_hold.cmd_clear, "NBLX-19990101-008")
+        with _io.open(_os.path.join(root, "records",
+                                    "NBLX-19990101-008.json"),
+                      encoding="utf-8") as fh:
+            return _rr.is_held(_json.load(fh))
+    finally:
+        (_hold.ROOT, _hold.RECORDS, _hold.HELD, _hold.MANIFEST,
+         _hold.REGISTER) = saved
+        _sh.rmtree(root, ignore_errors=True)
+
+_after_clearing = _cleared_record_reaches_the_register()
+_results.append((_after_clearing is False, "quiet",
+                 "a cleared record is one the renderer will publish",
+                 _after_clearing, None, False, None,
+                 "render_register.is_held() must be False after clearing"))
+
+
+# ------------------------------------------------------- 12. the transport
+# Everything above this point tests pure functions on payloads that were typed
+# into this file. That is most of the suite and it is not the whole risk. The
+# payloads have to arrive first, and they arrive through MCPStdio: a subprocess,
+# a pipe, a select loop, and a hand-rolled JSON-RPC framing that exists so this
+# harness cannot inherit a bug from the same library family as its subjects.
+#
+# Nothing tested it. A classifier that reads a payload correctly is no use if
+# the transport handed it the wrong payload, mislabelled a live subject as
+# dead, or discarded the subject's own account of why it died. Each case below
+# starts a real process and plants a real transport failure.
+
+_PY = sys.executable
+
+def _stub(body, timeout=8):
+    """A subject that behaves exactly as badly as the case requires."""
+    return _h.MCPStdio([_PY, "-u", "-c", body], cwd=".", timeout=timeout)
+
+def _transport(name, fn, want, kind):
+    try:
+        got = fn()
+    except Exception as e:
+        got = type(e).__name__
+    _results.append((got == want, kind, name, got, None, want, None, ""))
+
+# A server that prints a banner before speaking JSON-RPC is common and is not
+# fatal, but the banner is evidence: it means the channel reserved for framing
+# carried something else. Dropping it silently would erase the only trace.
+def _noise_is_kept():
+    c = _stub("import sys,json\n"
+              "sys.stdout.write('Server v1.0 starting\\n')\n"
+              "line=sys.stdin.readline()\n"
+              "req=json.loads(line)\n"
+              "print(json.dumps({'jsonrpc':'2.0','id':req['id'],'result':{}}))\n")
+    try:
+        c.request("initialize", {})
+        return c.protocol_noise
+    finally:
+        c.close()
+
+_transport("a banner on the JSON-RPC channel is recorded, not discarded",
+           _noise_is_kept, ["Server v1.0 starting"], "detect")
+
+# The id is the only thing tying a response to its request. A client that
+# returns the first message it sees will hand a probe the answer to a
+# different question, and every classifier downstream will read it as truth.
+def _wrong_id_is_not_accepted():
+    c = _stub("import sys,json\n"
+              "line=sys.stdin.readline()\n"
+              "req=json.loads(line)\n"
+              "print(json.dumps({'jsonrpc':'2.0','id':999,'result':{'wrong':1}}))\n"
+              "print(json.dumps({'jsonrpc':'2.0','id':req['id'],"
+              "'result':{'right':1}}))\n")
+    try:
+        return c.request("initialize", {}).get("result")
+    finally:
+        c.close()
+
+_transport("a response carrying another request's id is not mistaken for this one",
+           _wrong_id_is_not_accepted, {"right": 1}, "detect")
+
+# A subject that dies at import answers nothing. If that surfaced as anything
+# other than an explicit end-of-stream, the runner could not tell "died" from
+# "said something unexpected", and P10 grades those differently.
+def _dead_subject_is_eof():
+    c = _stub("import sys; sys.exit(1)")
+    try:
+        c.request("initialize", {})
+        return "returned normally"
+    except EOFError:
+        return "EOFError"
+    finally:
+        c.close()
+
+_transport("a subject that exits at import raises end of stream",
+           _dead_subject_is_eof, "EOFError", "detect")
+
+# A subject that accepts the connection and then never answers is the case
+# that hangs a harness forever. The deadline is what makes the suite finish.
+def _silent_subject_times_out():
+    c = _stub("import time; time.sleep(30)", timeout=1)
+    try:
+        c.request("initialize", {})
+        return "returned normally"
+    except TimeoutError:
+        return "TimeoutError"
+    finally:
+        c.close()
+
+_transport("a subject that accepts and never answers hits the deadline",
+           _silent_subject_times_out, "TimeoutError", "detect")
+
+# close() runs twice by design: once when startup fails, so the subject's own
+# diagnosis reaches the probe, and again in the runner's finally block. The
+# second read of a drained pipe returns nothing, and letting that nothing
+# overwrite the captured stderr would discard the only evidence there is.
+def _close_is_idempotent():
+    c = _stub("import sys; sys.stderr.write('ModuleNotFoundError: pandas\\n'); "
+              "sys.exit(1)")
+    first = c.close()
+    second = c.close()
+    return (first.strip(), second.strip())
+
+_transport("closing twice does not erase what the subject said on its way out",
+           _close_is_idempotent,
+           ("ModuleNotFoundError: pandas", "ModuleNotFoundError: pandas"),
+           "detect")
+
+# exit_summary is the sentence that goes in the record. "exited 0" and
+# "exited 0 having said nothing at all" are different observations about how
+# much the subject accounted for itself, and the record keeps them apart.
+def _summary(body):
+    c = _stub(body)
+    c.close()
+    return c.exit_summary()
+
+_transport("a silent clean exit is described as giving no account of itself",
+           lambda: _summary("import sys; sys.exit(0)"),
+           "exited 0 and wrote nothing to stderr, so it gave no account of "
+           "itself", "detect")
+
+_transport("a clean exit that wrote to stderr is not described as silent",
+           lambda: _summary("import sys; sys.stderr.write('warn\\n'); "
+                            "sys.exit(0)"),
+           "exited 0 with output on stderr", "detect")
+
+_transport("a nonzero exit reports its code",
+           lambda: _summary("import sys; sys.exit(3)"), "exited 3", "detect")
+
+# call() is what every probe actually invokes. Its contract is a three-tuple,
+# and the two failure shapes it has to keep apart are a JSON-RPC error, which
+# means the call did not happen, and isError on a result, which means it did
+# happen and went wrong. Collapsing those loses the distinction between a tool
+# that refused and a tool that failed.
+def _call(body):
+    c = _stub(body)
+    try:
+        c._id = 0
+        return c.call("t", {})
+    finally:
+        c.close()
+
+_transport("text content is joined out of the result",
+           lambda: _call("import sys,json\n"
+                         "req=json.loads(sys.stdin.readline())\n"
+                         "print(json.dumps({'jsonrpc':'2.0','id':req['id'],"
+                         "'result':{'content':[{'type':'text','text':'a'},"
+                         "{'type':'text','text':'b'}]}}))\n")[0],
+           "a\nb", "quiet")
+
+_transport("a JSON-RPC error is reported as an error and carries no text",
+           lambda: _call("import sys,json\n"
+                         "req=json.loads(sys.stdin.readline())\n"
+                         "print(json.dumps({'jsonrpc':'2.0','id':req['id'],"
+                         "'error':{'code':-32601,'message':'no such tool'}}))\n"
+                         )[:2],
+           (None, True), "detect")
+
+_transport("isError on a result is an error even though the call completed",
+           lambda: _call("import sys,json\n"
+                         "req=json.loads(sys.stdin.readline())\n"
+                         "print(json.dumps({'jsonrpc':'2.0','id':req['id'],"
+                         "'result':{'isError':True,'content':"
+                         "[{'type':'text','text':'boom'}]}}))\n")[:2],
+           ("boom", True), "detect")
+
+
 # ============================================================ report
 def main():
     fails = [r for r in _results if not r[0]]
