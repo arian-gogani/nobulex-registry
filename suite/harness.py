@@ -571,11 +571,22 @@ def classify_window_span(text, is_error, parsed, requested_days, arg_desc,
     if not parsed:
         return (FAIL_UNSAFE, "silent_empty",
                 f"accepted {arg_desc} and returned an empty array with no signal")
-    if not isinstance(requested_days, (int, float)) or requested_days <= 0:
+    if (not isinstance(requested_days, (int, float))
+            or isinstance(requested_days, bool)
+            or not math.isfinite(requested_days)
+            or requested_days <= 0):
         # ratio divides by this. A zero-length request is not a window anyone
         # can be short of, and it used to raise ZeroDivisionError out of the
         # classifier, which run.py's boundary turns into a failed run that
         # loses every other probe's result along with it.
+        #
+        # isfinite is here because nan cleared the old guard and then produced
+        # a false accusation. nan <= 0 is False, so it passed; ratio became
+        # nan; nan >= 1.0 - tol was False, so the short path ran; min(nan, av)
+        # returned nan; served >= nan was False; and the classifier returned
+        # FAIL_UNSAFE partial_truncation about a subject that had served the
+        # full window. Every comparison failed open in the direction of an
+        # accusation, which is the one direction this harness must not fail in.
         return (INDETERMINATE, None,
                 f"requested_days is {requested_days!r}, which is not a window "
                 f"a subject can serve less of; no span claim is issued")
@@ -622,6 +633,23 @@ def classify_window_span(text, is_error, parsed, requested_days, arg_desc,
                 f"could reach was not measured, so this cannot be attributed "
                 f"to the subject rather than to the data not existing: {ev}")
 
+    if (not isinstance(available_days, (int, float))
+            or isinstance(available_days, bool)
+            or not math.isfinite(available_days)
+            or available_days <= 0):
+        # available_days is the whole basis for attributing a shortfall, and a
+        # value of zero or less is not a measurement of reachable history, it
+        # is the absence of one. Left unchecked it produced a vacuous pass:
+        # owed became min(requested, 0) = 0, served >= 0 held for every
+        # payload, and the classifier reported "the request was honored to the
+        # limit of what the subject could reach (0 days available, 0 owed)"
+        # about a subject that had just served 364 days. A sentence that
+        # explains away a shortfall using a limit nobody measured is worse
+        # than no sentence.
+        return (INDETERMINATE, None,
+                f"the served window is short, and available_days is "
+                f"{available_days!r}, which is not a measurement of reachable "
+                f"history, so the shortfall cannot be attributed: {ev}")
     owed = min(requested_days, available_days)
     if served >= owed * (1.0 - tol_frac):
         return (PASS, None,

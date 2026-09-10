@@ -222,6 +222,66 @@ check("window_span / an honored undocumented window is not a failure",
                            requested_days=13 * 365, arg_desc="period='13y'"),
       PASS, None, "quiet")
 
+# Non-finite inputs. Both guards below already existed and both admitted nan,
+# because nan is a float and every comparison against it is False.
+#
+# requested_days=nan was the serious one. It cleared "requested_days <= 0",
+# ratio became nan, "nan >= 1.0 - tol" was False so the short path ran,
+# min(nan, available) returned nan, "served >= nan" was False, and the
+# classifier returned FAIL_UNSAFE partial_truncation about a subject that had
+# served the window in full. Every comparison failed open toward an
+# accusation, which is the single direction this harness must not fail in.
+_full = [{"Date": d, "Close": 1.0} for d in ("2026-01-01", "2026-12-31")]
+_short = [{"Date": d, "Close": 1.0} for d in ("2026-01-01", "2026-03-01")]
+
+check("window_span / a nan request does not become an accusation",
+      classify_window_span("x", False, _full, requested_days=float("nan"),
+                           arg_desc="period=?", available_days=365),
+      INDETERMINATE, None, "detect")
+
+check("window_span / an infinite request is not a window either",
+      classify_window_span("x", False, _full, requested_days=float("inf"),
+                           arg_desc="period=?", available_days=365),
+      INDETERMINATE, None, "detect")
+
+# available_days is the entire basis for attributing a shortfall. Zero is not
+# a measurement of reachable history, it is the absence of one, and it used to
+# produce a vacuous pass: owed became min(requested, 0) = 0, "served >= 0" held
+# for every payload, and the evidence read "the request was honored to the
+# limit of what the subject could reach (0 days available, 0 owed)" about a
+# subject that had just served 364 days.
+check("window_span / zero reachable history cannot explain a shortfall",
+      classify_window_span("x", False, _short, requested_days=365,
+                           arg_desc="period=max", available_days=0),
+      INDETERMINATE, None, "detect")
+
+check("window_span / negative reachable history cannot explain one either",
+      classify_window_span("x", False, _short, requested_days=365,
+                           arg_desc="period=max", available_days=-10),
+      INDETERMINATE, None, "detect")
+
+check("window_span / a nan availability cannot explain one either",
+      classify_window_span("x", False, _short, requested_days=365,
+                           arg_desc="period=max", available_days=float("nan")),
+      INDETERMINATE, None, "detect")
+
+# must not fire: the probe still has to reach all three real verdicts, or the
+# guards above have turned it into an abstention machine.
+check("window_span / a genuine withholding is still caught",
+      classify_window_span("x", False, _short, requested_days=365,
+                           arg_desc="period=max", available_days=365),
+      FAIL_UNSAFE, "partial_truncation", "quiet")
+
+check("window_span / a real availability limit still explains a shortfall",
+      classify_window_span("x", False, _short, requested_days=365,
+                           arg_desc="period=max", available_days=59),
+      PASS, None, "quiet")
+
+check("window_span / a fully served window still passes",
+      classify_window_span("x", False, _full, requested_days=365,
+                           arg_desc="period=max", available_days=365),
+      PASS, None, "quiet")
+
 # Clean: more data than asked for. Wasteful, not deceptive. Every bar the
 # caller requested is present, so nothing computed from it is wrong.
 generous = span_bars("2013-08-05", 6000, step=7)
