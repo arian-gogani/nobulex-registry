@@ -348,6 +348,19 @@ def main():
 
     started = datetime.now(timezone.utc)
     subject_dir = os.path.abspath(args.subject_dir)
+    # A typo in the local checkout or entry path is not evidence that a
+    # subject fails to initialize. Previously a missing script produced a
+    # COMPATIBILITY / FAIL_SAFE record after Python refused to open it.
+    if not os.path.isdir(subject_dir):
+        print(f"refusing to run: subject directory does not exist or is not "
+              f"a directory: {subject_dir!r}; no probes ran and no record "
+              "was written.", file=sys.stderr)
+        return 2
+    entry_path = os.path.join(subject_dir, args.entry)
+    if not os.path.exists(entry_path):
+        print(f"refusing to run: subject entry does not exist: {entry_path!r}; "
+              "no probes ran and no record was written.", file=sys.stderr)
+        return 2
 
     # Settled before the first probe, not after the last one. An operator who
     # has named a number that is already taken should learn that in the first

@@ -2483,6 +2483,44 @@ gate("interpreter / PATH command works after changing subject directory",
 gate("interpreter / relative symlink path keeps its environment identity",
      lambda: _interpreter_control(True), True, "quiet")
 
+# ================= local subject paths are not subject verdicts
+def _subject_path_preflight(kind):
+    import contextlib
+    from unittest.mock import patch
+    class ReachedInspection(Exception):
+        pass
+    with tempfile.TemporaryDirectory() as tmp:
+        subject = os.path.join(tmp, "subject")
+        entry = "server.py"
+        valid = kind in ("nested", "absolute")
+        if kind == "file":
+            with open(subject, "w") as f:
+                f.write("not a directory")
+        elif kind != "missing-dir":
+            os.mkdir(subject)
+        if valid:
+            os.mkdir(os.path.join(subject, "src"))
+            script = os.path.join(subject, "src", "server.py")
+            with open(script, "w") as f:
+                f.write("# fictional fixture\n")
+            entry = script if kind == "absolute" else "src/server.py"
+        err = io.StringIO()
+        argv = ["run.py", "--subject-dir", subject, "--entry", entry,
+                "--upstream", "fictional fixture", "--out", tmp]
+        try:
+            with patch.object(sys, "argv", argv), contextlib.redirect_stderr(err), \
+                    patch.object(_run, "git", side_effect=ReachedInspection):
+                rc = _run.main()
+        except ReachedInspection:
+            return valid
+        return not valid and rc == 2 and "no probes ran" in err.getvalue() \
+            and not any(name.endswith(".json") for name in os.listdir(tmp))
+
+for _kind in ("missing-dir", "file", "missing-entry", "nested", "absolute"):
+    gate(f"subject path / {_kind}",
+         lambda k=_kind: _subject_path_preflight(k), True,
+         "quiet" if _kind in ("nested", "absolute") else "detect")
+
 # ============================================================ report
 def main():
     fails = [r for r in _results if not r[0]]
