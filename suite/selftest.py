@@ -23,8 +23,18 @@ Exit code 0 only if every case passes. Anything else means no verdict this
 harness issues is worth publishing.
 """
 
-import json, sys
+import json, os, subprocess, sys
 from datetime import datetime, timezone
+
+# Git exports repository-local variables to hooks. cwd alone cannot isolate
+# the temporary fixture repositories while GIT_DIR, GIT_INDEX_FILE, etc.
+# still point at the caller. Previously a worktree pre-push run failed 13
+# cases and fixture commits changed the caller's HEAD/index and core.bare.
+# Clear Git's own list in this test process only, before any fixture imports
+# or commands. The parent hook's export checks retain their original context.
+for _git_env_name in subprocess.check_output(
+        ["git", "rev-parse", "--local-env-vars"], text=True).splitlines():
+    os.environ.pop(_git_env_name, None)
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
 
@@ -2422,7 +2432,7 @@ _transport("isError on a result is an error even though the call completed",
 # A bad local interpreter is operator configuration, not subject behavior.
 # Stop at git if preflight lets it through, so these checks never reach a
 # live authority or launch a subject, including against the old runner.
-import os, subprocess, tempfile
+import tempfile
 
 def _invalid_interpreter_refused(kind):
     import contextlib
