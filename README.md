@@ -30,7 +30,9 @@ This offline example feeds fictional data into the suite's actual truncation cla
 
 The script checks all three expected outcomes and exits nonzero if any changes. It needs only Python 3.11 or newer. No credentials or downloads are needed after cloning. This demonstrates one classifier, not a live tool test or a registry attestation. Even its `PASS` does not establish that the prices are correct.
 
-Found an input that produces the wrong verdict? [Open an issue](https://github.com/arian-gogani/nobulex-registry/issues/new) with fictional or shareable input, the command you ran, the actual output, and the result you expected. Please leave credentials and private data out.
+Found an input that produces the wrong verdict? [Open an issue](https://github.com/arian-gogani/nobulex-registry/issues/new/choose) with fictional or shareable input, the command you ran, the actual output, and the result you expected. Please leave credentials and private data out.
+
+Want to contribute a test, fix, or method correction? Start with [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 

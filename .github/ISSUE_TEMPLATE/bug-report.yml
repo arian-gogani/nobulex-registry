@@ -1,0 +1,37 @@
+name: Reproducible wrong result
+description: Report a classifier or runner result with fictional or shareable input.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Small reproductions help. Do not upload credentials, private data,
+        held records, embargoed subject names, or embargoed findings.
+        Use fictional inputs when possible. Local results are not registry attestations.
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Smallest reproduction
+      description: Include fictional or shareable input and the exact command, run from a stated directory. Prefer a short inline example.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: Paste the verdict, relevant evidence or error, and process exit code. Say if no verdict was produced.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result and reason
+      description: Explain the expected verdict or behavior and the evidence supporting it. INDETERMINATE can be correct when evidence is insufficient.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment and commit
+      description: Include git rev-parse HEAD, python3 --version, operating system, and whether local changes affect the reproduction. Omit private paths or identifiers.
+    validations:
+      required: true
