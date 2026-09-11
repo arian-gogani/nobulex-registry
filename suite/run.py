@@ -521,6 +521,41 @@ def main():
                   "This subject exposes: "
                   + (", ".join(tool_names) or "(no tools at all)"),
                   file=sys.stderr)
+            # Refusing is right. Refusing without help is not, because the
+            # operator's next move is to read the subject documentation and
+            # guess which tool returns bars and which returns identity, and
+            # that guess is most of what connecting a subject costs.
+            #
+            # The subject already answered. tools/list carries a description
+            # and an inputSchema for every tool, and this payload is in hand
+            # while only the names are being used.
+            #
+            # It prints and still exits 2. Accepting its own proposal would
+            # turn a refusal into a decision, and the failure that invites is
+            # not a wrong verdict but a sound verdict about the wrong tool:
+            # every probe correct, the whole record answering a question
+            # nobody asked. A human passes the flag or nothing runs.
+            try:
+                import discover
+                listed_full = listed.get("result", {}).get("tools", [])
+                print("\nreading the subject's own tools/list, as a starting "
+                      "point only:", file=sys.stderr)
+                for lbl, tbl, flag in (
+                        ("history", discover._HISTORY, "--tool-history"),
+                        ("entity info", discover._INFO, "--tool-info")):
+                    got, why_not = discover.propose(listed_full, tbl, lbl)
+                    if got:
+                        print(f"  {flag} {got['tool']}   (score "
+                              f"{got['score']}: {' '.join(got['why'])})",
+                              file=sys.stderr)
+                    else:
+                        print(f"  {flag} not proposed. {why_not}",
+                              file=sys.stderr)
+                print("  Confirm before passing these. The suite did not "
+                      "choose them and will not.", file=sys.stderr)
+            except Exception as e:
+                print(f"\n(could not propose from tools/list: "
+                      f"{type(e).__name__})", file=sys.stderr)
             return 2
 
         hist = args.tool_history
