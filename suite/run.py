@@ -16,7 +16,7 @@ traceback attached to the record. Nothing in here can produce a PASS by
 falling through.
 """
 
-import argparse, hashlib, json, os, platform, re, subprocess, sys, traceback
+import argparse, hashlib, json, os, platform, re, shutil, subprocess, sys, traceback
 from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -275,11 +275,26 @@ class Run:
                         None, tb)
 
 
+def resolve_subject_python(value):
+    """Resolve before changing cwd, without dereferencing a venv symlink.
+
+    Previously abspath turned a PATH command such as python3 into a nonexistent
+    local file. Invalid interpreter paths also reached the observation stage.
+    Neither condition is evidence about the subject.
+    """
+    candidate = shutil.which(value)
+    if not candidate:
+        raise ValueError(f"subject interpreter is missing or not executable: {value!r}")
+    return os.path.abspath(candidate)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--subject-dir", required=True)
     ap.add_argument("--entry", default="server.py")
-    ap.add_argument("--python", default=sys.executable)
+    ap.add_argument("--python", default=sys.executable,
+                    help="Subject Python executable: a PATH command or a path "
+                         "relative to your current directory.")
     ap.add_argument("--out", default="records")
     ap.add_argument("--record-id", default=None,
                     help="The id this record will be filed under. Defaults to "
@@ -324,7 +339,12 @@ def main():
     # relative interpreter path stops resolving the moment the process starts.
     # Resolve it here, against the directory the operator actually typed it in,
     # rather than letting it fail inside Popen with a path nobody recognises.
-    args.python = os.path.abspath(args.python)
+    try:
+        args.python = resolve_subject_python(args.python)
+    except ValueError as exc:
+        print(f"refusing to run: {exc}; no probes ran and no record was written.",
+              file=sys.stderr)
+        return 2
 
     started = datetime.now(timezone.utc)
     subject_dir = os.path.abspath(args.subject_dir)

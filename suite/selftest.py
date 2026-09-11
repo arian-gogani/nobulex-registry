@@ -2418,6 +2418,61 @@ _transport("isError on a result is an error even though the call completed",
            ("boom", True), "detect")
 
 
+# ================= interpreter preflight before any observation
+# A bad local interpreter is operator configuration, not subject behavior.
+# Stop at git if preflight lets it through, so these checks never reach a
+# live authority or launch a subject, including against the old runner.
+import os, subprocess, tempfile
+
+def _invalid_interpreter_refused(kind):
+    import contextlib
+    import io
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory() as tmp:
+        candidate = os.path.join(tmp, "python")
+        if kind == "directory":
+            os.mkdir(candidate)
+        elif kind == "nonexecutable":
+            with open(candidate, "w") as f:
+                f.write("not executable\n")
+            os.chmod(candidate, 0o600)
+        err = io.StringIO()
+        argv = ["run.py", "--subject-dir", tmp, "--python", candidate,
+                "--upstream", "fictional fixture", "--out", tmp]
+        with patch.object(sys, "argv", argv), contextlib.redirect_stderr(err), \
+                patch.object(_run, "git", side_effect=AssertionError(
+                    "invalid interpreter reached subject inspection")):
+            rc = _run.main()
+        return rc == 2 and "interpreter" in err.getvalue() and \
+            "no probes ran" in err.getvalue() and not any(
+                name.endswith(".json") for name in os.listdir(tmp))
+
+for _kind in ("missing", "directory", "nonexecutable"):
+    gate(f"interpreter / {_kind} is refused before observing a subject",
+         lambda k=_kind: _invalid_interpreter_refused(k), True, "detect")
+
+def _interpreter_control(relative):
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory() as tmp:
+        candidate = os.path.join(tmp, "fixture-python")
+        os.symlink(sys.executable, candidate)
+        if relative:
+            supplied = os.path.relpath(candidate)
+            resolved = _run.resolve_subject_python(supplied)
+        else:
+            with patch.dict(os.environ, {"PATH": tmp}):
+                resolved = _run.resolve_subject_python("fixture-python")
+        result = subprocess.run([resolved, "-c", "print('interpreter-ok')"],
+                                cwd=tmp, capture_output=True, text=True,
+                                timeout=10)
+        return resolved == candidate and result.returncode == 0 and \
+            result.stdout.strip() == "interpreter-ok"
+
+gate("interpreter / PATH command works after changing subject directory",
+     lambda: _interpreter_control(False), True, "quiet")
+gate("interpreter / relative symlink path keeps its environment identity",
+     lambda: _interpreter_control(True), True, "quiet")
+
 # ============================================================ report
 def main():
     fails = [r for r in _results if not r[0]]
