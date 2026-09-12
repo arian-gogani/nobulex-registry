@@ -395,19 +395,72 @@ def a1_chart(ticker, rng="5d", interval="1d"):
         raise AuthorityUnavailable(url, status=200,
                                    reason=f"authority answered with no result: {detail}",
                                    body_excerpt=str(err)[:200])
+    # Each hop below was reached by assuming the shape rather than checking it,
+    # and every one of them raised a bare AttributeError or TypeError out of
+    # this function. The comment above says what that costs: the record ends up
+    # asserting the authority was unreachable, naming a Python type, when the
+    # authority answered.
+    #
+    # Measured before writing this, five shapes did it: meta present and null,
+    # timestamp present and null, a null inside the timestamp array, quote[0]
+    # holding a list, and result holding a list of strings. None is exotic. A
+    # JSON null is what an upstream sends when it has nothing to say about a
+    # field, which is most of them, most of the time.
+    if not isinstance(results, list):
+        raise AuthorityUnavailable(
+            url, status=200,
+            reason=f"chart.result is {type(results).__name__}, not a list of "
+                   f"results, so there is no window to read")
     res = results[0]
-    meta = res.get("meta", {})
-    if "timestamp" not in res:
+    if not isinstance(res, dict):
+        raise AuthorityUnavailable(
+            url, status=200,
+            reason=f"chart.result[0] is {type(res).__name__}, not a result "
+                   f"object")
+    meta = res.get("meta")
+    if meta is None:
+        meta = {}
+    elif not isinstance(meta, dict):
+        raise AuthorityUnavailable(
+            url, status=200,
+            reason=f"chart.result[0].meta is {type(meta).__name__}, so the "
+                   f"symbol and timezone this window is quoted in cannot be "
+                   f"read")
+    stamps_raw = res.get("timestamp")
+    if stamps_raw is None:
         raise AuthorityUnavailable(url, status=200,
                                    reason="authority returned a result with no "
                                           "timestamp array, so there are no "
                                           "sessions in this window")
+    if not isinstance(stamps_raw, list):
+        raise AuthorityUnavailable(
+            url, status=200,
+            reason=f"chart.result[0].timestamp is {type(stamps_raw).__name__}, "
+                   f"not an array of session opens")
+    bad = [i for i, t in enumerate(stamps_raw)
+           if not (isinstance(t, (int, float)) and not isinstance(t, bool)
+                   and math.isfinite(t))]
+    if bad:
+        raise AuthorityUnavailable(
+            url, status=200,
+            reason=f"{len(bad)} of {len(stamps_raw)} timestamps are not "
+                   f"finite numbers, first at index {bad[0]}. A window whose "
+                   f"session opens cannot all be read is not a window to "
+                   f"measure a subject against")
     try:
         q = res["indicators"]["quote"][0]
     except (KeyError, IndexError, TypeError):
         raise AuthorityUnavailable(url, status=200,
                                    reason="authority returned timestamps with "
                                           "no matching quote block")
+    # The subscript above succeeds when quote[0] is a list, because indexing a
+    # list of lists is legal. The failure then lands two screens later on
+    # q.get, as an AttributeError, far from the thing that caused it.
+    if not isinstance(q, dict):
+        raise AuthorityUnavailable(
+            url, status=200,
+            reason=f"chart.result[0].indicators.quote[0] is "
+                   f"{type(q).__name__}, not an object of price columns")
 
     # The symbol the upstream answered about, compared to the one asked for.
     # It was recorded and never checked, so a substitute serve became the
@@ -578,7 +631,33 @@ def classify_absent_entity(text, is_error, parsed):
     return INDETERMINATE, None, "response neither an error nor a parseable payload"
 
 def classify_empty_window(text, is_error, parsed):
-    """Probe: a request whose documented constraints guarantee no data."""
+    """Probe: a request the tool's own description says it cannot satisfy.
+
+    NO CALL SITE. run.py never invokes this, so it has never graded a real
+    subject, and its two selftest cases are the only thing that has ever run
+    it. Counted here rather than left for someone to discover, because a
+    classifier with tests and no caller reads as coverage it is not providing.
+
+    Read the first sentence carefully before wiring it up, because there are
+    two things it could mean and only one of them is safe:
+
+      unsatisfiable   the request is one the tool documents that it cannot
+                      answer, so [] arriving as a success is the failure:
+                      the caller asked something invalid and was told
+                      nothing was wrong. That is what this grades, and what
+                      the cases assert.
+
+      empty but valid a well formed request over a window that genuinely
+                      holds nothing, a market holiday or a closed weekend.
+                      There [] is the correct answer and the tool is right
+                      to send it.
+
+    Wiring this against the second reading turns every correct answer about
+    a holiday into FAIL_UNSAFE silent_empty, which is a false accusation
+    against a tool that did its job. The probe that feeds it has to send a
+    request the subject itself declares out of range, not merely one that
+    happens to return nothing.
+    """
     if is_error:
         return PASS, None, "refused through the protocol error channel"
     if parsed is not None and isinstance(parsed, list) and len(parsed) == 0:

@@ -41,6 +41,7 @@ sys.path.insert(0, __file__.rsplit("/", 1)[0])
 from harness import (
     PASS, FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, OUT_OF_SCOPE,
     aggregate, parse_bars, CONFIG, next_in_sequence,
+    a1_chart, AuthorityUnavailable,
     classify_absent_entity, classify_empty_window, classify_invalid_argument,
     classify_padded_argument,
     classify_window_span,
@@ -152,6 +153,80 @@ p, _ = parse_bars(t)
 check("empty_window / real records are not a failure",
       classify_empty_window(t, False, p),
       PASS, None, "quiet")
+
+# ============================================ 2b. the authority reader itself
+# a1_chart had no coverage at all. It is the one function whose failures are
+# claims about a third party's service rather than about a subject: run.py
+# catches what escapes here and writes reachable: false with a Python type
+# name as the reason. Measured before these were written, five ordinary
+# response shapes did exactly that. A JSON null is what an upstream sends when
+# it has nothing to say about a field, which is most fields, most of the time.
+
+def _chart(result, error=None):
+    return {"chart": {"result": result, "error": error}}
+
+_GOODQ = {"open": [1.0], "high": [2.0], "low": [0.5], "close": [1.5]}
+
+def _a1(payload):
+    """a1_chart against a stubbed fetch. Returns the outcome as a token."""
+    import harness as _h
+    keep = _h._get_json
+    _h._get_json = lambda url, **kw: payload
+    try:
+        r = _h.a1_chart("AAPL", "1d", "5d")
+        return ("bars", len(r["bars"]), r.get("tz_basis"))
+    except AuthorityUnavailable as e:
+        return ("refused", None, str(e)[:90])
+    except Exception as e:
+        return ("RAW:" + type(e).__name__, None, str(e)[:90])
+    finally:
+        _h._get_json = keep
+
+check("a1_chart / a result that is not a list is refused, not raised",
+      _a1(_chart({"a": 1})), "refused", None, "detect")
+
+check("a1_chart / a result entry that is not an object is refused",
+      _a1(_chart(["x"])), "refused", None, "detect")
+
+check("a1_chart / a timestamp array that is null is refused",
+      _a1(_chart([{"meta": {"symbol": "AAPL"}, "timestamp": None,
+                   "indicators": {"quote": [{}]}}])),
+      "refused", None, "detect")
+
+# A scalar timestamp rather than a string, deliberately. A string is caught
+# downstream by the finite-number check, which enumerates its characters and
+# finds none are numbers, so a string does not isolate this guard: disabling
+# the guard leaves a string still refused, by the next one. A bare int is not
+# iterable at all, so without this guard it raises TypeError out of the
+# function and run.py records the authority as unreachable.
+check("a1_chart / a timestamp that is not iterable is refused, not raised",
+      _a1(_chart([{"meta": {"symbol": "AAPL"}, "timestamp": 1757000000,
+                   "indicators": {"quote": [_GOODQ]}}])),
+      "refused", None, "detect")
+
+check("a1_chart / a null inside the timestamp array is refused",
+      _a1(_chart([{"meta": {"symbol": "AAPL"}, "timestamp": [None],
+                   "indicators": {"quote": [_GOODQ]}}])),
+      "refused", None, "detect")
+
+check("a1_chart / a quote block that is a list is refused",
+      _a1(_chart([{"meta": {"symbol": "AAPL"}, "timestamp": [1757000000],
+                   "indicators": {"quote": [[]]}}])),
+      "refused", None, "detect")
+
+# must not fire: the reader still reads an ordinary answer, and still tolerates
+# a missing meta, because meta carries the symbol and timezone and its absence
+# is recorded in tz_basis rather than treated as a broken response.
+check("a1_chart / an ordinary payload still yields bars",
+      _a1(_chart([{"meta": {"symbol": "AAPL", "gmtoffset": -14400},
+                   "timestamp": [1757000000],
+                   "indicators": {"quote": [_GOODQ]}}])),
+      "bars", 1, "quiet")
+
+check("a1_chart / a null meta is tolerated, not refused",
+      _a1(_chart([{"meta": None, "timestamp": [1757000000],
+                   "indicators": {"quote": [_GOODQ]}}])),
+      "bars", 1, "quiet")
 
 # ================================================== 3. unsignaled_fallback
 # Planted: an interval outside the documented enum, silently defaulted.
