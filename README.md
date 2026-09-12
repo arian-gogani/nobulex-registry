@@ -186,10 +186,12 @@ Every deviation is classified before it is recorded. The taxonomy is versioned f
 | `fabricated_field` | Returned a field populated with a value that has no upstream basis. |
 | `partial_truncation` | Returned a subset of the result with no truncation signal. |
 | `unsignaled_fallback` | Served from a fallback source without disclosing the substitution. |
-| `auth_degradation` | Silently downgraded to a lower privilege tier and returned reduced data as complete. |
+| `auth_degradation` | Silently downgraded to a lower privilege tier and returned reduced data as complete. **Reserved, not implemented.** |
 | `schema_drift` | Upstream shape changed and the adapter absorbed it into a wrong but valid response. |
 
 Each code is designed to be decidable from a run artifact without a human judgment call, which is what keeps the corpus consistent as it grows.
+
+Seven of the eight are decidable that way and the suite emits them. `auth_degradation` is not, which is why it is reserved rather than implemented. Deciding it requires knowing which tier the subject was entitled to, and a run artifact does not carry that: a shorter history is indistinguishable from a tier that was always shorter. What the suite can see, it already grades as `partial_truncation`, which describes the symptom without asserting a cause it cannot establish. Naming the reason a code is absent is more useful than quietly shipping seven under a heading that says eight.
 
 The accumulated history of which subjects fail in which ways is the part of this that cannot be reconstructed later. Anyone can copy the taxonomy in an afternoon. Nobody can copy three years of observations they did not make.
 
@@ -242,7 +244,7 @@ The harness speaks raw JSON-RPC over stdio and never imports the subject's code,
 
 `--subject-dir` must be an existing directory. `--entry` is resolved relative to that directory, or may be an absolute path. A missing entry is refused with exit code 2 before observations or recording. Correction: a typo in the entry path previously produced a `COMPATIBILITY` record with a `FAIL_SAFE` startup finding, even though the named script did not exist. This preflight checks paths, not whether the existing subject can start or has working dependencies.
 
-`--upstream` is required and has no default, which is deliberate. Every other field of the tuple is read off the run: the package from the directory, the commit from git, the resolved dependencies from the interpreter you pointed at. That one cannot be, because a server does not have to say where its data comes from and can be wrong when it does. A default there would be a value the record asserts and nobody observed, which is `fabricated_field`, which is one of the eight causes this suite grades other software for. It was a hardcoded string here until it was caught, and it is named in this paragraph rather than quietly fixed because a registry that hides its own defects has no standing to publish anyone else's.
+`--upstream` is required and has no default, which is deliberate. Every other field of the tuple is read off the run: the package from the directory, the commit from git, the resolved dependencies from the interpreter you pointed at. That one cannot be, because a server does not have to say where its data comes from and can be wrong when it does. A default there would be a value the record asserts and nobody observed, which is `fabricated_field`, which is one of the causes this suite grades other software for. It was a hardcoded string here until it was caught, and it is named in this paragraph rather than quietly fixed because a registry that hides its own defects has no standing to publish anyone else's.
 
 `--tool-history` and `--tool-info` are required for a worse reason, and it is worth reading before running anything. The probes call the subject by tool name. A name the subject does not expose comes back as a protocol error, and a protocol error is what several of these probes count as *correct* behavior: a tool that refuses a nonexistent ticker through the error channel has passed P01 by design. So a run pointed at a subject that does not have these tools answered PASS on four probes, on evidence that consisted entirely of the tools not being there, and wrote a record with a full subject tuple that looked exactly like a real one. That is a verdict that fails quiet, produced by the suite whose only purpose is to catch verdicts that fail quiet.
 
