@@ -211,8 +211,29 @@ def day(ts):
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
+class UnreadableRecord(Exception):
+    """A file in records/ that is not a record this renderer can read."""
+
+
 def load(dirpath):
-    """Every .json directly inside dirpath, ordered by record_id."""
+    """Every .json directly inside dirpath, ordered by record_id.
+
+    json.load was called bare here, so anything in records/ that is not
+    valid JSON took the renderer down with an uncaught JSONDecodeError,
+    in --check, in --preview, and in the plain publish run.
+
+    That is now reachable rather than hypothetical. run.py claims a record
+    id by creating the output file with O_EXCL at the start of a run and
+    writing into it at the end, so a run that dies in between leaves a
+    zero byte .json sitting in records/. The pre-push hook then tells the
+    operator to run this renderer as the remedy, and the remedy crashed on
+    the artefact the crash produced.
+
+    Refusing by name is the whole point. A traceback says the renderer
+    broke; naming the file says which record cannot be read, which is the
+    thing an operator can act on, and it is the same distinction this
+    registry grades other software for.
+    """
     if not os.path.isdir(dirpath):
         return []
     out = []
@@ -222,8 +243,22 @@ def load(dirpath):
         path = os.path.join(dirpath, name)
         if not os.path.isfile(path):
             continue
-        with io.open(path, encoding="utf-8") as fh:
-            out.append((name, json.load(fh)))
+        try:
+            with io.open(path, encoding="utf-8") as fh:
+                doc = json.load(fh)
+        except ValueError as e:
+            size = os.path.getsize(path)
+            raise UnreadableRecord(
+                "%s is not readable as JSON (%d bytes): %s.\n"
+                "A zero byte file here is usually a run that claimed this "
+                "id and died before writing the record. Delete it or finish "
+                "the run; the id stays spent either way, which is the point "
+                "of the claim." % (name, size, e))
+        if not isinstance(doc, dict):
+            raise UnreadableRecord(
+                "%s parsed as %s, not a record object"
+                % (name, type(doc).__name__))
+        out.append((name, doc))
     return sorted(out, key=lambda p: p[1].get("record_id", p[0]))
 
 
@@ -1168,8 +1203,21 @@ def main(argv):
             "  suite/hold.py --commit where the records live to rewrite it.\n"
             % os.path.relpath(MANIFEST_PATH, ROOT))
         return 2
-    absent = missing_held(committed, set(
-        r.get("record_id") for _, r in load(HELD_DIR)))
+    # load() refuses by name on anything in records/ it cannot read, rather
+    # than raising a JSONDecodeError out of main. Caught here so every mode
+    # gets the same refusal, including the plain publish run that the
+    # pre-push hook tells an operator to use as its remedy.
+    try:
+        absent = missing_held(committed, set(
+            r.get("record_id") for _, r in load(HELD_DIR)))
+    except UnreadableRecord as e:
+        sys.stderr.write(
+            "REFUSED: %s\n"
+            "  Nothing was written. The register is compiled from the\n"
+            "  records, so a record this cannot read is a count it cannot\n"
+            "  make, and publishing a smaller number quietly is the failure\n"
+            "  this gate exists to prevent.\n" % e)
+        return 2
     if absent:
         sys.stderr.write(
             "REFUSED: the manifest commits to %d held record%s and %d of them\n"

@@ -1645,6 +1645,44 @@ gate("register / a cleared record with no status publishes as a card",
          "publication": {"status": "CLEARED"}})]),
      False, "quiet")
 
+# ============== 10c-iii. the renderer, on what a crashed run leaves behind
+# run.py claims a record id by creating the output file with O_EXCL at the
+# start of a run and writing into it at the end, so a run that dies in
+# between leaves a zero byte .json in records/. load() called json.load bare,
+# so that artefact took the renderer down with an uncaught JSONDecodeError in
+# every mode, including the plain publish run that hooks/pre-push names as
+# the remedy. The crash produced the thing that broke the fix for the crash.
+
+def _rload(files):
+    """render_register.load over a throwaway directory of given contents."""
+    import tempfile, os as _os, io as _io
+    d = tempfile.mkdtemp()
+    try:
+        for n, body in files.items():
+            with _io.open(_os.path.join(d, n), "w", encoding="utf-8") as fh:
+                fh.write(body)
+        try:
+            return ("loaded", None, len(_rr.load(d)))
+        except _rr.UnreadableRecord as e:
+            return ("refused", None, str(e)[:70])
+        except Exception as e:
+            return ("RAW:" + type(e).__name__, None, str(e)[:70])
+    finally:
+        import shutil as _sh; _sh.rmtree(d, ignore_errors=True)
+
+check("renderer / a zero byte record is refused by name, not raised",
+      _rload({"NBLX-00000000-777.json": ""}),
+      "refused", None, "detect")
+
+check("renderer / valid JSON that is not a record object is refused",
+      _rload({"NBLX-00000000-778.json": "[1, 2, 3]"}),
+      "refused", None, "detect")
+
+check("renderer / a real record still loads",
+      _rload({"NBLX-00000000-779.json":
+              '{"record_id": "NBLX-00000000-779", "verdict": "PASS"}'}),
+      "loaded", None, "quiet")
+
 # ======================= 10d. the export guard, on a throwaway repository
 #
 # The record ids below are deliberately fictional. The first draft of this
