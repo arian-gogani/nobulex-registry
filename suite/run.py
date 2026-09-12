@@ -370,13 +370,52 @@ def main():
     record_id = args.record_id or next_record_id(
         args.out, started.strftime("%Y%m%d"))
     out_path = os.path.join(os.path.abspath(args.out), f"{record_id}.json")
-    if os.path.exists(out_path):
-        print(f"refusing to run: {out_path} already exists.\n"
+    # Two holes here, and they have the same consequence: a record destroyed
+    # by a later run while every citation of its id still resolves.
+    #
+    # The first is scope. next_record_id walks the whole tree, because held
+    # and withdrawn records live in a subdirectory and a spent number is spent
+    # wherever it sits. This check looked only at the top level, so an
+    # operator passing --record-id for a number a held record already holds
+    # sailed past a guard whose own sequencer knew better. Now it asks the
+    # same question of the same tree.
+    #
+    # The second is time. This test ran here and the file was written at the
+    # end of the run, minutes of live probing later. Two runs started in the
+    # same second computed the same next id, both found nothing on disk, and
+    # the second to finish overwrote the first. Nothing in between noticed,
+    # and the run that lost was as likely to be the FAIL_UNSAFE one as not.
+    #
+    # So the id is claimed now, atomically, with O_EXCL, and the real record
+    # is written into that handle at the end. A crashed run leaves an empty
+    # file holding its number, which is deliberate: a visible stub that costs
+    # one id is a better failure than a silently destroyed verdict, and it is
+    # a true statement that a run began under that identity.
+    spent = []
+    for _root, _dirs, _files in os.walk(os.path.abspath(args.out)):
+        spent.extend(os.path.join(_root, f) for f in _files
+                     if f.startswith(record_id))
+    if spent:
+        print(f"refusing to run: {record_id} is already spent at "
+              f"{spent[0]}.\n"
               "A record id is an identity in a register, and other documents "
               "cite it. Overwriting one would destroy evidence while leaving "
               "every reference to it intact, which is the exact shape of "
-              "failure this suite exists to catch. Pass --record-id with an "
-              "unused id, or write to a different --out.", file=sys.stderr)
+              "failure this suite exists to catch. A held or withdrawn record "
+              "spent its number as surely as a published one. Pass "
+              "--record-id with an unused id, or write to a different --out.",
+              file=sys.stderr)
+        return 2
+
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    try:
+        os.close(os.open(out_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
+    except FileExistsError:
+        print(f"refusing to run: {out_path} was claimed between the check "
+              f"above and this line, which means another run holds "
+              f"{record_id} right now. That is the race this claim exists to "
+              f"lose safely. Start again and a new id will be taken.",
+              file=sys.stderr)
         return 2
 
     commit = git(subject_dir, "rev-parse", "HEAD")
