@@ -2378,6 +2378,39 @@ _results.append((_ok, "quiet",
                  "result={'ok': 1} attempts=1", None, ""))
 
 
+# ===================================== the spent-id guard, on prefix collisions
+# The guard that refuses a record id already on disk matched with startswith,
+# so NBLX-<day>-100 collided with NBLX-<day>-1000 because one id is a prefix
+# of the other. Safe in direction, it stops a run rather than destroying a
+# record, but it stops the wrong run and reports the wrong id as spent. Latent
+# until the thousandth record, and cheaper to fix than to remember.
+
+def _spent(files, rid):
+    """The guard's matching rule, over a list of filenames."""
+    sfx = (".json", ".md", ".txt", ".withdrawn.json")
+    return bool([f for f in files
+                 if f == rid or any(f == rid + x for x in sfx)
+                 or f.startswith(rid + ".")])
+
+_ON_DISK = ["NBLX-00000000-1000.json", "NBLX-00000000-002.json",
+            "NBLX-00000000-003.withdrawn.json"]
+
+check("spent id / a shorter id is not spent by a longer one that starts the same",
+      (_spent(_ON_DISK, "NBLX-00000000-100"), None, None),
+      False, None, "detect")
+
+check("spent id / an exact match is still spent",
+      (_spent(_ON_DISK, "NBLX-00000000-1000"), None, None),
+      True, None, "quiet")
+
+check("spent id / a withdrawn record still spent its number",
+      (_spent(_ON_DISK, "NBLX-00000000-003"), None, None),
+      True, None, "quiet")
+
+check("spent id / an unused number is free",
+      (_spent(_ON_DISK, "NBLX-00000000-999"), None, None),
+      False, None, "quiet")
+
 # ================================================ record id sequencing
 # The number on a record is its identity, and other documents cite it. Two
 # records wearing one number is the same defect this suite grades others for:

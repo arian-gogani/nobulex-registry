@@ -391,10 +391,18 @@ def main():
     # file holding its number, which is deliberate: a visible stub that costs
     # one id is a better failure than a silently destroyed verdict, and it is
     # a true statement that a run began under that identity.
+    # startswith made NBLX-<day>-100 collide with NBLX-<day>-1000, because one
+    # id is a prefix of the other. The refusal is safe in direction, it stops a
+    # run rather than destroying a record, but it stops the wrong run and says
+    # something untrue about which id is spent. A suffix is what separates the
+    # id from what follows it: .json, .withdrawn.json, or the reply notice.
+    _suffixes = (".json", ".md", ".txt", ".withdrawn.json")
     spent = []
     for _root, _dirs, _files in os.walk(os.path.abspath(args.out)):
         spent.extend(os.path.join(_root, f) for f in _files
-                     if f.startswith(record_id))
+                     if f == record_id
+                     or any(f == record_id + s for s in _suffixes)
+                     or f.startswith(record_id + "."))
     if spent:
         print(f"refusing to run: {record_id} is already spent at "
               f"{spent[0]}.\n"
