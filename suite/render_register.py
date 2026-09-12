@@ -103,6 +103,17 @@ VERDICT_VAR = {
     "HELD": "--safe",
 }
 
+# The two keys above that are not findings about a subject. HELD and WITHDRAWN
+# describe a record's standing in this registry rather than what it measured in
+# someone else's software, and the embargo notice is written to state both: its
+# own heading reads "Held, not published", and it says in as many words that
+# one of the withheld records is this registry's own withdrawn one. Everything
+# else in VERDICT_VAR is a finding and may not appear in that notice. The guard
+# is derived from the map minus this pair rather than typed as its own list, so
+# a verdict added to the map is guarded on the day it is added rather than on
+# the day someone remembers a second list exists.
+NOT_A_FINDING = ("HELD", "WITHDRAWN")
+
 # Probe outcomes, worst first. This is the order the page asserts in prose
 # under every probe tally, and card() now checks the record against it instead
 # of asserting it. It is stated here rather than imported from harness.py
@@ -136,6 +147,28 @@ def _dict(v):
     stop the held count and the embargo notice from being published.
     """
     return v if isinstance(v, dict) else {}
+
+
+def _canon_id(v):
+    """A record id reduced to the one spelling that every reference to it shares.
+
+    A held record's id reached the public page because two guards compared ids
+    literally and a withdrawal's superseded_by list carried one in lower case.
+    withdrawal_card() asked `x not in held_ids`, got a miss, and printed the id
+    instead of counting it; leaked() then asked `i in html`, got a miss for the
+    same reason, and the build exited 0 having written the page. A second guard
+    that repeats the first guard's assumption is not a second guard, which is
+    why nothing caught this between the two of them.
+
+    Record ids are ASCII (the NBLX prefix, digits, hyphens), so casefolding
+    cannot fold two distinct ids into one and neither can stripping. What they
+    can do is make NBLX-00000000-901, nblx-00000000-901 and the same id with a
+    trailing space compare equal, which is what a reader does with them without
+    being asked. Anything that is not a string canonicalises to the empty
+    string, and every caller here treats the empty string as "cannot be shown
+    to be safe" rather than as "matches nothing".
+    """
+    return v.strip().casefold() if isinstance(v, str) else ""
 
 
 def esc(v):
@@ -195,8 +228,39 @@ def load(dirpath):
 
 
 def is_withdrawn(rec):
-    """A record the registry retracted. Retracted is not the same as held."""
-    return (rec.get("status") or "").upper() == "WITHDRAWN"
+    """A record the registry retracted. Retracted is not the same as held.
+
+    This read `(rec.get("status") or "").upper() == "WITHDRAWN"`, which is the
+    sibling is_held() before its own fix and for the reason its docstring names:
+    no .strip() and no isinstance guard. A status of "WITHDRAWN\\n", the shape a
+    record carries when a hand edit leaves the newline inside the quotes,
+    returned False. The record then rendered as a live in-force verdict against
+    a named subject, the withdrawn count in the public note read 0, and nothing
+    on the page or in the build output disagreed. That is this register
+    asserting a finding it had already taken back, which is the exact class of
+    claim it publishes verdicts about in other people's software. A status that
+    was not a string raised AttributeError and took the whole build down, and
+    build() is the thing that publishes the held count, so a malformed record
+    could stop the disclosure as well as corrupt it.
+
+    The default here is not is_held()'s default, and the difference is not an
+    oversight. The two predicates are asked different questions. An absent
+    status is the normal shape of a live record, every published record in this
+    repository carries none, so "no status" has to mean not withdrawn or every
+    record becomes a retraction. A status that is present and is not a string is
+    a different fact: the record is saying something about its own standing that
+    this code cannot read. That case fails toward withdrawn, because the two
+    wrong answers are not the same size. Calling a live record retracted
+    understates what this registry currently finds and costs nobody but us.
+    Calling a retracted record live republishes an adverse verdict about a third
+    party that we have already withdrawn, to a reader who has no way to know.
+    """
+    status = rec.get("status")
+    if status is None:
+        return False
+    if not isinstance(status, str):
+        return True
+    return status.strip().upper() == "WITHDRAWN"
 
 
 def load_all():
@@ -631,6 +695,10 @@ def withdrawal_card(w, held_ids=()):
     the public page next to a named subject, and a reader who sees an id with
     no verdict attached will supply one. So held successors are counted, not
     named.
+
+    Counted on a canonicalised id rather than a literal one. The leak this
+    stopped arrived as the lower case spelling of a held id, which an exact
+    comparison did not recognise as held and therefore printed.
     """
     rid = w.get("record_id", "")
     number = rid.split("-")[-1] if "-" in rid else rid
@@ -665,7 +733,23 @@ def withdrawal_card(w, held_ids=()):
                        pending=True))
     sup = w.get("superseded_by") or []
     if sup:
-        named = [x for x in sup if x not in held_ids]
+        # `x not in held_ids` was an exact match against exact ids, so a
+        # superseded_by entry differing from a held id only in case was not
+        # recognised as held, was not counted, and was printed on the public
+        # page beside a named subject. leaked() missed it a few steps later for
+        # the same reason and the build exited 0. Both sides are canonicalised
+        # here so that the spelling of a reference cannot decide whether the
+        # thing it refers to is withheld.
+        #
+        # An entry this code cannot canonicalise, which is anything that is not
+        # a string, is counted rather than printed. It cannot be shown not to
+        # name a held record, and the rule everywhere in this file is that in
+        # doubt a record is held. It also could not be joined into the sentence
+        # below, so the behaviour it replaces was a TypeError with the page
+        # half built.
+        withheld = set(_canon_id(h) for h in held_ids) - set([""])
+        named = [x for x in sup
+                 if isinstance(x, str) and _canon_id(x) not in withheld]
         hidden = len(sup) - len(named)
         txt = ", ".join(named)
         if hidden:
@@ -800,6 +884,43 @@ def embargo_block(held):
     return "".join(out)
 
 
+def names_verdict(block):
+    """Verdict classes this block discloses, however it happens to spell them.
+
+    The guard this replaces was `v in block`, an exact substring match, run over
+    a block that interpolates the gate name through .replace("_", " ") a dozen
+    lines from where it is checked. The verdicts whose names contain an
+    underscore are exactly FAIL_SAFE, FAIL_UNSAFE and OUT_OF_SCOPE, so the guard
+    fired for INDETERMINATE and PASS, which disclose the least, and was
+    structurally incapable of firing for the one embargo_block()'s own docstring
+    names as the harm. A held_by of FAIL_UNSAFE published "Gate: FAIL UNSAFE" on
+    the public page and the build exited 0. The guard was reading the source
+    spelling of the verdict while the page carried the rendered one.
+
+    So the separator is not what decides it. Each verdict matches with any run
+    of non-alphanumeric characters standing in for its underscores, on word
+    boundaries so that PASS does not match inside surpass, and without regard to
+    case so that a lower case gate name is caught too. What this has to see is
+    what a reader sees, and a reader reads "fail unsafe", "Fail-Unsafe" and
+    "FAIL_UNSAFE" as the same accusation about the same unnamed subject.
+
+    HELD and WITHDRAWN are excluded by NOT_A_FINDING rather than by the match,
+    because the notice is required to say both of those words about itself.
+    Until this comparison was made case-insensitive they were excluded by luck:
+    the block spells them "Held" and "withdrawn", so an uppercase substring
+    search never saw them.
+    """
+    out = []
+    for v in VERDICT_VAR:
+        if v in NOT_A_FINDING:
+            continue
+        pat = r"[^0-9A-Za-z]+".join(re.escape(p) for p in v.split("_"))
+        if re.search(r"(?<![0-9A-Za-z])%s(?![0-9A-Za-z])" % pat, block,
+                     re.IGNORECASE):
+            out.append(v)
+    return out
+
+
 def leaked(html, held_ids):
     """Held record ids that survived into a page that may not name them.
 
@@ -815,8 +936,22 @@ def leaked(html, held_ids):
     records, because the leak is a property of the output, not of any one
     input. Every path that produced this string is covered, including the ones
     added after this function was written.
+
+    It is checked without regard to case, and it was not. `i in html` is exact,
+    and so was withdrawal_card()'s suppression of held successors, so an id
+    spelled in lower case was neither withheld by the first guard nor noticed
+    by the second, and the page was written with it on it. The whitespace
+    variant survived only by accident: "NBLX-...-901 " still contains the id as
+    a substring, so this function caught that one while missing the other, and
+    the guard looked like it worked. Two guards that compare the same way are
+    one guard, and this is the one that has to hold when the other has already
+    let something through, so it is the broader match of the two. A false
+    positive here refuses a build; a false negative publishes an identifier
+    this registry promised to withhold, and an id shaped NBLX-00000000-000 does
+    not occur by accident in prose.
     """
-    return sorted(i for i in held_ids if i and i in html)
+    hay = html.casefold()
+    return sorted(i for i in held_ids if _canon_id(i) and _canon_id(i) in hay)
 
 
 def _names(html, needle):
@@ -907,7 +1042,13 @@ def build(preview=False):
         # found. It is checked rather than merely commented because the block is
         # prose, and prose is edited by people who are thinking about a sentence
         # rather than about what the sentence discloses.
-        named = [v for v in VERDICT_VAR if v not in ("HELD",) and v in block]
+        #
+        # The match is names_verdict() rather than `v in block` because the
+        # block prettifies the gate name before printing it, and the only three
+        # verdicts that prettifying changes are the three worth hiding. The
+        # check now runs against the block as published rather than against the
+        # spelling the record used.
+        named = names_verdict(block)
         if named:
             raise SystemExit(
                 "the embargo notice names %s. It may state that records are "

@@ -1310,6 +1310,19 @@ gate("register / the embargo notice still counts everything it withholds",
      lambda: "<b>4 records issued and withheld.</b>"
      in _rr.embargo_block(_withheld(1, 3)), True, "quiet")
 
+# The notice is required to say two of VERDICT_VAR's keys about itself: its
+# heading reads "Held, not published", and it names its own withheld retraction
+# in as many words. Until build()'s guard stopped caring about case those two
+# were excluded by luck rather than by rule, because the block spells them
+# "Held" and "withdrawn" while the guard searched for the uppercase forms.
+# NOT_A_FINDING states the exclusion instead, and this is where it is held to.
+# It sits up here rather than beside the other verdict-spelling cases below
+# because every _note() case between here and there compiles a page with a
+# withheld retraction in it, so a guard that refuses this notice takes the run
+# down before a named case can report it.
+gate("register / the notice may still say it is holding a withdrawn record",
+     lambda: _rr.names_verdict(_rr.embargo_block(_withheld(1, 3))), [], "quiet")
+
 # ---- the public note. A record that is both held and withdrawn fell out of
 # `visible`, so it never reached the withdrawn count and was added to the live
 # holds instead, under a sentence asserting that a held record is in force.
@@ -1458,6 +1471,179 @@ gate("register / a real subject is still rendered into the tuple",
      lambda: "some-server" in _rr.tuple_rows(
          {"record_id": "X", "subject": {"package": "some-server"}}),
      True, "quiet")
+
+# ---- how a reference is spelled, which is three separate defects wearing one
+# shape. Every id and every verdict below is fictional and same-shaped, for the
+# reason 10d gives in full: a tracked file naming a real held record is the leak
+# it is testing for.
+_HELD_ID = "NBLX-00000000-901"
+
+
+def _held_rec(gate_name="right_of_reply"):
+    return ("h.json", {"record_id": _HELD_ID, "verdict": "FAIL_UNSAFE",
+                       "subject": {"package": "beta-ledger-mcp",
+                                   "commit": "0123456789abcdef"},
+                       "publication": {"status": "HELD",
+                                       "held_by": gate_name}})
+
+
+def _withdrawal(superseded_by, status="WITHDRAWN"):
+    """A retraction the registry has cleared to publish, naming a successor."""
+    return ("w.json", {"record_id": "NBLX-00000000-900", "status": status,
+                       "subject_as_claimed": {"package": "acme-quotes-mcp",
+                                              "commit": "deadbeefcafe"},
+                       "withdrawn_at": "2026-01-01T00:00:00+00:00",
+                       "reason": "the claimed commit resolved to nothing",
+                       "superseded_by": superseded_by,
+                       "publication": {"status": "CLEARED"}})
+
+
+def _page(public=(), held=()):
+    """The whole public page, compiled over a throwaway records tree.
+
+    Same installation as _note() above and for the same reason: build() reads
+    two module-level directories, so the fixture is the directories. This hands
+    back the page rather than one line of it, because the cases below are about
+    an identifier that reaches the html without being rendered as a record, and
+    a sentence-shaped assertion cannot see one.
+    """
+    d = _tempfile.mkdtemp(prefix="nbx-page-")
+    hd = _os.path.join(d, "held")
+    _os.makedirs(hd)
+    for where, recs in ((d, public), (hd, held)):
+        for name, obj in recs:
+            with open(_os.path.join(where, name), "w", encoding="utf-8") as fh:
+                json.dump(obj, fh)
+    keep = (_rr.RECORDS, _rr.HELD_DIR)
+    try:
+        _rr.RECORDS, _rr.HELD_DIR = d, hd
+        return _rr.build()[0]
+    finally:
+        _rr.RECORDS, _rr.HELD_DIR = keep
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+# A held id reached the public page through a case mismatch. withdrawal_card()
+# suppressed held successors with `x not in held_ids` and leaked() looked for
+# them with `i in html`, both exact, so a superseded_by entry carrying the lower
+# case spelling of a held id was neither withheld by the first guard nor noticed
+# by the second, and the build wrote the page and exited 0. The whitespace
+# variant survived only because a trailing space leaves the id intact as a
+# substring, which is what made the pair look like it worked.
+gate("register / a held id spelled in lower case is not printed as a successor",
+     lambda: "nblx-00000000-901" in _page([_withdrawal([_HELD_ID.lower()])],
+                                          [_held_rec()]),
+     False, "detect")
+
+gate("register / it is counted instead, exactly as the exact spelling is",
+     lambda: "1 record, none yet published"
+     in _page([_withdrawal([_HELD_ID.lower()])], [_held_rec()]),
+     True, "detect")
+
+gate("register / a held id with a trailing space is still that held id",
+     lambda: "1 record, none yet published"
+     in _rr.withdrawal_card(_withdrawal([_HELD_ID + " "])[1], {_HELD_ID}),
+     True, "detect")
+
+gate("register / the leak detector reads the page without regard to case",
+     lambda: _rr.leaked("<p>%s</p>" % _HELD_ID.lower(), {_HELD_ID}) == [_HELD_ID],
+     True, "detect")
+
+gate("register / a successor that cannot be canonicalised is counted, not shown",
+     lambda: "1 record, none yet published"
+     in _rr.withdrawal_card(_withdrawal([{"id": _HELD_ID}])[1], {_HELD_ID}),
+     True, "detect")
+
+gate("register / a successor that is not held is named in full",
+     lambda: "NBLX-00000000-902"
+     in _rr.withdrawal_card(_withdrawal(["NBLX-00000000-902"])[1], {_HELD_ID}),
+     True, "quiet")
+
+gate("register / a page naming no held id at all is clean",
+     lambda: _rr.leaked(_page([_withdrawal(["NBLX-00000000-902"])],
+                              [_held_rec()]), {_HELD_ID}) == [],
+     True, "quiet")
+
+# The embargo notice publishes the gate name through .replace("_", " "), and
+# the verdicts whose names carry an underscore are exactly FAIL_SAFE,
+# FAIL_UNSAFE and OUT_OF_SCOPE. The guard was an exact `v in block`, so it fired
+# for INDETERMINATE and PASS and could not fire for the three the notice exists
+# to keep off the page. A held_by of FAIL_UNSAFE published "Gate: FAIL UNSAFE".
+gate("register / a notice naming FAIL_UNSAFE through a prettified gate is refused",
+     lambda: _refuses(lambda: _page([], [_held_rec("FAIL_UNSAFE")])),
+     True, "detect")
+
+gate("register / the verdict is read as the page spells it, not as the record does",
+     lambda: _rr.names_verdict("<p>Gate: FAIL UNSAFE.</p>") == ["FAIL_UNSAFE"],
+     True, "detect")
+
+gate("register / a lower case gate name discloses the same verdict",
+     lambda: _rr.names_verdict("<p>Gate: fail unsafe.</p>") == ["FAIL_UNSAFE"],
+     True, "detect")
+
+gate("register / the other two underscored verdicts are caught as well",
+     lambda: _rr.names_verdict("<p>OUT OF SCOPE and FAIL-SAFE</p>")
+     == ["FAIL_SAFE", "OUT_OF_SCOPE"],
+     True, "detect")
+
+gate("register / the spelling that already fired still fires",
+     lambda: _rr.names_verdict("<p>Gate: INDETERMINATE.</p>") == ["INDETERMINATE"],
+     True, "detect")
+
+gate("register / a verdict inside a longer word is not a disclosure",
+     lambda: _rr.names_verdict("<p>the run passes and surpasses the last</p>"),
+     [], "quiet")
+
+gate("register / a real gate name compiles the notice",
+     lambda: _refuses(lambda: _page([], [_held_rec("right_of_reply")])),
+     False, "quiet")
+
+# is_withdrawn() had neither .strip() nor an isinstance guard, which is_held()'s
+# docstring calls out as the asymmetry it was fixing on its own side. A status of
+# "WITHDRAWN\n", the shape a hand edit leaves behind, read as not withdrawn, so
+# the retraction rendered as a live in-force verdict about a named subject and
+# the withdrawn count on the page read 0. A non-string status raised
+# AttributeError and took the build down with it.
+gate("register / a retraction with a trailing newline is still a retraction",
+     lambda: _rr.is_withdrawn({"status": "WITHDRAWN\n"}), True, "detect")
+
+gate("register / and one padded with spaces on both sides is too",
+     lambda: _rr.is_withdrawn({"status": "  WITHDRAWN  "}), True, "detect")
+
+gate("register / a status that is not a string does not take the build down",
+     lambda: _survives(lambda: _rr.is_withdrawn({"status": ["WITHDRAWN"]})),
+     True, "detect")
+
+gate("register / nor is it read as a record still in force",
+     lambda: _rr.is_withdrawn({"status": ["WITHDRAWN"]}), True, "detect")
+
+gate("register / a whitespace-padded retraction renders as a withdrawal card",
+     lambda: '<div class="rec wd">'
+     in _page([_withdrawal([], status="WITHDRAWN\n")]), True, "detect")
+
+gate("register / and the note counts it under withdrawn rather than published",
+     lambda: "0 records published, 0 issued and held (0 of those withdrawn and "
+     "no longer in force), and 1 withdrawn and published"
+     in _page([_withdrawal([], status="WITHDRAWN\n")]), True, "detect")
+
+gate("register / a record carrying no status at all is not a retraction",
+     lambda: _rr.is_withdrawn({"record_id": "X", "verdict": "PASS"}),
+     False, "quiet")
+
+gate("register / an explicitly null status is not a retraction either",
+     lambda: _rr.is_withdrawn({"record_id": "X", "status": None}),
+     False, "quiet")
+
+gate("register / a status naming something else is not a retraction",
+     lambda: _rr.is_withdrawn({"record_id": "X", "status": "IN_FORCE"}),
+     False, "quiet")
+
+gate("register / a cleared record with no status publishes as a card",
+     lambda: '<div class="rec wd">' in _page([("r.json", {
+         "record_id": "NBLX-00000000-903", "verdict": "PASS",
+         "subject": {"package": "aqfeed", "commit": "0123456789ab"},
+         "publication": {"status": "CLEARED"}})]),
+     False, "quiet")
 
 # ======================= 10d. the export guard, on a throwaway repository
 #
