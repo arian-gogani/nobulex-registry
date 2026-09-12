@@ -207,8 +207,8 @@ MANIFEST_PURPOSE = (
     "the accusation while withholding the evidence for it.")
 
 
-def manifest_in_head_state():
-    """Whether HEAD carries a readable manifest: 'absent', 'unreadable', 'ok'.
+def manifest_in_head_state(rev="HEAD"):
+    """Whether `rev` carries a readable manifest: 'absent', 'unreadable', 'ok'.
 
     Three states, not two. A repository whose first commit has not happened,
     or which has never committed a manifest, is ABSENT: there is no
@@ -218,9 +218,15 @@ def manifest_in_head_state():
     licence to overwrite it.
 
     Collapsing those two into None made the first commit refuse.
+
+    `rev` defaults to HEAD and every existing caller leaves it there. It is a
+    parameter so that first_commitments() below can ask the same question of
+    an older commit without a second copy of this three-way answer, which is
+    the kind of duplicate that drifts apart and then disagrees in the one
+    case nobody tested.
     """
     rel = os.path.relpath(MANIFEST, ROOT).replace(os.sep, "/")
-    blob = git(["show", "HEAD:%s" % rel])
+    blob = git(["show", "%s:%s" % (rev, rel)])
     if blob is None:
         return "absent", None
     try:
@@ -312,6 +318,147 @@ def dropped_commitments(head, disk):
     return sorted(set(head or {}) - set(disk or {}))
 
 
+def commitments_not_in_head(head, disk):
+    """Entries the manifest on disk carries that HEAD does not commit to.
+
+    The inverse of dropped_commitments, and the hole it leaves open is
+    larger. Every comparison in this file iterated the HEAD side, so an entry
+    HEAD had never seen was never visited by anything: not by
+    rewritten_commitments, which reads head.items(), and not by
+    dropped_commitments, which subtracts disk from head. A record added to
+    the manifest and not yet committed could therefore be edited and
+    re-committed without limit, with no --amend asked for and no git commit
+    run, and --verify printed "the manifest matches HEAD" every time.
+
+    Reproduced before this was written: a second held record was added, the
+    manifest was written by --commit and deliberately not committed, and the
+    record's verdict was then rewritten three times in a row. --commit exited
+    0 on each rewrite without ever asking for --amend, --verify exited 0 on
+    each, and HEAD still listed one file while --verify said two matched it.
+
+    head is None means git could not answer or the committed manifest could
+    not be read. That is not the same fact as HEAD answering that it commits
+    to nothing, and reporting every entry as uncommitted on the strength of
+    it would turn an unreadable repository into a wall of accusations. The
+    callers announce that weaker state separately, so this returns nothing.
+    """
+    if head is None:
+        return []
+    return sorted(set(disk or {}) - set(head))
+
+
+def commitment_commits():
+    """Every commit that changed the manifest, oldest first, or None.
+
+    A pathspec makes git list only the commits where the file differs from
+    its parent, so this is one entry per version of the manifest rather than
+    one per commit in the repository. None when git cannot answer, which
+    includes a repository whose first commit has not happened.
+    """
+    rel = os.path.relpath(MANIFEST, ROOT).replace(os.sep, "/")
+    log = git(["log", "--format=%H", "--", rel])
+    if log is None:
+        return None
+    return list(reversed(log.split()))
+
+
+def first_commitments():
+    """The earliest commitment history carries for each file.
+
+    Returns (state, {file: {sha256, bytes, commit}}) with the same three
+    states manifest_in_head_state uses, because it is what reads each commit.
+
+    Why the earliest and not HEAD's. Every check here compared against
+    `git show HEAD:records/held.manifest.json`, and HEAD is the tip rather
+    than the history. The same hand that edits a record can move the tip:
+    flip a verdict, run --commit --amend, run `git commit --amend
+    --no-edit`, and --verify goes green with one commit in the log and the
+    hash that was committed on the day the record was issued gone from the
+    reachable object graph. That sequence was run before this was written and
+    it printed "1 held file match the manifest, and the manifest matches
+    HEAD" over a verdict that had been flipped from FAIL to PASS.
+
+    Walking to the earliest narrows that window and does not close it, and
+    the difference matters enough to say plainly rather than to imply. An
+    amended tip only destroys the tip's version of the manifest. A
+    commitment made in some earlier commit survives it and is found here,
+    so the rewrite is caught. A commitment whose only version lives in the
+    tip commit is destroyed along with it, and nothing inside the repository
+    can catch that, because the evidence it would be caught by is what the
+    amend deleted. Confirmed by running exactly that: with one commit in the
+    log, this walk returns the rewritten manifest as the earliest one and
+    finds no divergence at all.
+
+    So cmd_verify also says out loud when the commitment it is relying on
+    was introduced by the tip, since a tip is one `git commit --amend` from
+    gone. An external anchor is the only thing that fixes the remainder, and
+    the module docstring already lists it as a stated gap.
+
+    Cost: one `git log` plus one `git show` per version of the manifest, on
+    every --verify. That is seven subprocesses on this repository today and
+    it grows with the number of times the manifest has changed, not with the
+    number of commits. --audit already reads every blob reachable from every
+    ref, so this is not the expensive thing in the file. No cap on the walk:
+    a cap here would be a commitment skipped and counted as agreement, which
+    is the defect this suite grades other people on.
+    """
+    commits = commitment_commits()
+    if commits is None:
+        return "absent", None
+    first = {}
+    seen_unreadable = False
+    for sha in commits:
+        state, held = manifest_in_head_state(sha)
+        if state != "ok":
+            seen_unreadable = seen_unreadable or state == "unreadable"
+            continue
+        for name, row in held.items():
+            if name not in first:
+                first[name] = {"sha256": row.get("sha256"),
+                               "bytes": row.get("bytes"), "commit": sha}
+    if not first:
+        return ("unreadable" if seen_unreadable else "absent"), None
+    return "ok", first
+
+
+def rewritten_since_first(first, disk):
+    """Entries whose sha256 differs from the earliest commitment rather than
+    from HEAD's. Returns [(file, was, now, was_bytes, now_bytes, commit)].
+
+    The comparison itself is rewritten_commitments, unchanged, because the
+    question is the same one and two copies of it would eventually answer
+    differently. All this adds is the commit that introduced the value being
+    compared against, so the report names something a stranger can go and
+    read instead of asserting that a rewrite happened.
+
+    A file that has left the manifest is not reported here. It is dropped,
+    not rewritten, and dropping is what publication looks like: the record
+    moves to records/ and is hashed in public from then on.
+    """
+    return [(name, was, now, wb, nb, (first or {})[name].get("commit"))
+            for name, was, now, wb, nb
+            in rewritten_commitments(first, disk)]
+
+
+def published_out_of_hold(names):
+    """Of `names`, the ones that left the hold by publishing.
+
+    A held file is allowed to leave the manifest, and there is exactly one
+    way that happens legitimately: --clear moves the record out of
+    records/held/ and into records/, where it is a tracked file that the
+    register renders and that anyone can hash. So a dropped entry whose file
+    is now sitting in records/ is the ordinary end of a hold, and a dropped
+    entry whose file is simply gone is the quiet edit dropped_commitments
+    warns about.
+
+    This is not a way around the refusal. Putting the record in records/ to
+    make the drop acceptable publishes it, and cmd_verify_export already
+    refuses a record file the register never published.
+    """
+    return [n for n in names
+            if os.path.isfile(os.path.join(RECORDS, n))]
+
+
 def cmd_commit(amend=False):
     names = held_names()
     manifest = {
@@ -369,6 +516,43 @@ def cmd_commit(amend=False):
             "  difficult. If the record legitimately changed, re-run with\n"
             "  --amend and say in the commit message what changed and why.\n")
         return 2
+    # Refusing the rewrite and permitting the drop refuses nothing, because
+    # two calls do what one call is stopped from doing. Move the record out
+    # of records/held/, run --commit, and this command cheerfully writes a
+    # manifest with the entry gone: rewritten_commitments skips it, since its
+    # `now` is None, and dropped_commitments knew about it and was never
+    # asked. Commit that manifest, put back an edited record, run --commit
+    # again, and the entry looks new rather than rewritten, so nothing
+    # refuses. Verified end to end: a verdict went from FAIL to PASS, the
+    # committed hash changed, --verify finished green, and --amend was never
+    # typed once.
+    #
+    # dropped_commitments' own docstring called this "the other way to make
+    # an altered record verify clean" and only --verify was consulting it.
+    # A file that published is not this: it left the hold through --clear and
+    # is in records/ being hashed in public.
+    dropping = dropped_commitments(head, fresh)
+    published = set(published_out_of_hold(dropping))
+    would_drop = [n for n in dropping if n not in published]
+    if would_drop and not amend:
+        sys.stderr.write("REFUSED: this would drop a commitment already in "
+                         "HEAD.\n")
+        for name in would_drop:
+            sys.stderr.write("  %s\n    HEAD: %s bytes  %s\n    disk: no "
+                             "entry, and no file in records/\n"
+                             % (name, head[name].get("bytes"),
+                                (head[name].get("sha256") or "")[:16]))
+        sys.stderr.write(
+            "  Nothing was written. Deleting the line is the quieter way to\n"
+            "  make an altered record verify clean, and it is quieter\n"
+            "  precisely because the hash never changes: it stops existing.\n"
+            "  A held file leaves the manifest when it publishes, and then\n"
+            "  it is in records/ where anyone can hash it. If this record is\n"
+            "  meant to be withdrawn rather than published, re-run with\n"
+            "  --amend and say in the commit message what was withdrawn and\n"
+            "  why, because the diff is the only thing a stranger will have\n"
+            "  to judge it by.\n")
+        return 2
     # No generation timestamp anywhere in here. A timestamp would change the
     # file on every run, which makes the diff meaningless, and a manifest
     # whose diff is meaningless cannot be used to show that nothing changed.
@@ -424,9 +608,51 @@ def cmd_verify(quiet=False):
     # beside them. Both are writable by the same hand in the same minute, so
     # agreeing with each other establishes nothing on its own. What fixes a
     # verdict is the manifest in history.
-    head = manifest_at_head()
+    #
+    # manifest_in_head_state returns the same map manifest_at_head does, and
+    # also says which of the three states produced it, which the check below
+    # needs: an entry missing from HEAD because HEAD has no readable manifest
+    # is a different fact from an entry missing from a manifest HEAD can read.
+    head_state, head = manifest_in_head_state()
     rewritten = rewritten_commitments(head, want)
     dropped = dropped_commitments(head, want)
+    uncommitted_entries = commitments_not_in_head(head, want)
+    first_state, first = first_commitments()
+    since_first = rewritten_since_first(first, want)
+
+    # Both of the above were computed and discarded, which made this the most
+    # expensive kind of dead code: the docstring on first_commitments explains
+    # at length why HEAD alone is not enough, and nothing acted on the answer.
+    #
+    # rewritten_commitments asks whether disk disagrees with HEAD. The same
+    # hand can edit a record, run --commit, and amend the tip, after which
+    # HEAD and disk agree and that check goes quiet forever. The commitment
+    # that cannot be amended away is the earliest one in history, which is
+    # what first_commitments finds and what this compares against.
+    #
+    # Reported separately from the HEAD check and after it, because the two
+    # say different things. HEAD disagreeing is an edit that has not been
+    # committed yet. The first commitment disagreeing is an edit that has
+    # already been papered over, and it is the one a stranger auditing this
+    # repository would care about.
+    if since_first and not any(n == m for n, _, _, _, _ in rewritten
+                               for m, _, _, _, _, _ in since_first):
+        sys.stderr.write(
+            "\nTHE ORIGINAL COMMITMENT DISAGREES:\n")
+        for name, was, now, wb, nb, commit in since_first:
+            sys.stderr.write(
+                "  %s\n    first committed in %s: %s bytes  %s\n"
+                "    on disk now:              %s bytes  %s\n"
+                % (name, (commit or "?")[:12], wb, (was or "")[:16],
+                   nb, (now or "")[:16]))
+        sys.stderr.write(
+            "  HEAD and the working copy agree, so the check above stayed\n"
+            "  quiet. They agree because both changed. This compares against\n"
+            "  the first commit that ever carried a hash for this file, which\n"
+            "  no later amend can reach. If the edit was legitimate, the\n"
+            "  commit that made it is the explanation, and the sha above is\n"
+            "  the thing to explain.\n")
+        return 2
 
     if rewritten:
         sys.stderr.write(
