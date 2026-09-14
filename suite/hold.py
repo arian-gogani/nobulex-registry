@@ -47,8 +47,10 @@ Usage:  python3 suite/hold.py --commit   (write the manifest from the records)
                                           already carries, which --commit
                                           refuses to do quietly)
         python3 suite/hold.py --verify   (fail if a held record was altered,
-                                          or if the manifest committing to it
-                                          was itself rewritten)
+                                          if the manifest committing to it was
+                                          itself rewritten, or if the manifest
+                                          claims a commitment history does not
+                                          carry)
         python3 suite/hold.py --audit    (also search git for leaked content)
         python3 suite/hold.py --verify-export
                                          (for the public repo, where the
@@ -120,6 +122,63 @@ def git(args):
         return None
 
 
+def _canon_id(v):
+    """A record id reduced to the one spelling every reference to it shares.
+
+    render_register._canon_id says why, and this is deliberately the same
+    reduction rather than a second opinion about it. Record ids are ASCII (the
+    NBLX prefix, digits, hyphens), so casefolding cannot fold two distinct ids
+    into one and neither can stripping. What they can do is make
+    NBLX-00000000-901 and nblx-00000000-901 compare equal, which is what a
+    reader does with them without being asked.
+
+    Anything that is not a string canonicalises to the empty string, and every
+    caller drops those rather than searching for "" and matching everything.
+    """
+    return v.strip().casefold() if isinstance(v, str) else ""
+
+
+def canon_ids(ids):
+    """(spelling the manifest uses, spelling to compare with) for each usable id.
+
+    Built once per scan rather than once per blob, because the three scans
+    below search every tracked file, every blob reachable from any ref, and
+    every commit message in the repository.
+    """
+    out = []
+    for rid in ids or ():
+        c = _canon_id(rid)
+        if c:
+            out.append((rid, c))
+    return out
+
+
+def ids_in(text, canon):
+    """Which of `canon`'s ids appear in `text`, compared without regard to case.
+
+    The one comparison all three disclosure scans make, in one place, because
+    they were three copies of `rid in text` and all three were exact. An id
+    spelled in lower case in a tracked file, in a blob, or in a commit message
+    was therefore not a leak according to any of them.
+
+    render_register.leaked() had already been fixed for precisely this and its
+    docstring states the rule the fix came from: two guards that compare the
+    same way are one guard. Three scans comparing the same wrong way are one
+    scan, and hold.py's are the last gate before a public push, where
+    render_register's guard no longer applies because the page is already
+    written. _canon_id's own docstring records that a lower-case spelling of a
+    held id has already occurred in this repository.
+
+    Returns ids in the spelling the manifest uses. The spelling that was found
+    is deliberately not returned and not printed: it is a substring of a held
+    record and the caller's whole job is to not disclose one.
+    """
+    if not isinstance(text, str) or not canon:
+        return []
+    hay = text.casefold()
+    return sorted(rid for rid, c in canon if c in hay)
+
+
 def blobs_in_history():
     """Every blob reachable from any ref, as {object id: one path it had}.
 
@@ -175,7 +234,7 @@ def history_leaks(ids, held_files=()):
         return None
     manifest_name = os.path.basename(MANIFEST)
     wanted = set(held_files or ())
-    ids = [i for i in ids if i]
+    canon = canon_ids(ids)
     hits = {}
     for oid, path in blobs.items():
         base = os.path.basename(path)
@@ -184,7 +243,7 @@ def history_leaks(ids, held_files=()):
         if base in wanted:
             hits.setdefault(base, set()).add(path)
             continue
-        if not ids:
+        if not canon:
             continue
         # Read it whole. A size cap here would be an input skipped and counted
         # as agreement, which is the defect this suite grades other people on,
@@ -192,9 +251,8 @@ def history_leaks(ids, held_files=()):
         blob = git(["cat-file", "-p", oid])
         if not blob:
             continue
-        for rid in ids:
-            if rid in blob:
-                hits.setdefault(rid, set()).add(path)
+        for rid in ids_in(blob, canon):
+            hits.setdefault(rid, set()).add(path)
     return hits
 
 
@@ -362,6 +420,43 @@ def commitment_commits():
     return list(reversed(log.split()))
 
 
+def head_sha():
+    """The full sha of HEAD, or None when git cannot answer.
+
+    Used to tell a commitment that has been in history for a while from one
+    that arrived in the tip commit, which is one `git commit --amend` from
+    never having existed.
+    """
+    out = git(["rev-parse", "HEAD"])
+    return out.strip() if out else None
+
+
+def introduced_by_tip(first):
+    """Files whose earliest commitment is the tip commit itself, sorted.
+
+    first_commitments' docstring says plainly that walking to the earliest
+    commitment narrows the window and does not close it: a commitment whose
+    only version lives in the tip is destroyed along with the tip, and nothing
+    inside the repository can catch that, because the evidence it would be
+    caught by is what the amend deleted.
+
+    It then promised that cmd_verify "says out loud when the commitment it is
+    relying on was introduced by the tip", and cmd_verify did not say it: the
+    state this returns was computed and thrown away. This is that sentence,
+    made into something that can be computed and tested.
+
+    Not a failure. A record committed to for the first time is the ordinary
+    case and it always passes through this state on the day it is issued. It
+    is a statement about how much the check below is worth today, which is
+    less than it will be worth after the next commit.
+    """
+    tip = head_sha()
+    if not tip:
+        return []
+    return sorted(name for name, row in (first or {}).items()
+                  if row.get("commit") == tip)
+
+
 def first_commitments():
     """The earliest commitment history carries for each file.
 
@@ -438,6 +533,34 @@ def rewritten_since_first(first, disk):
     return [(name, was, now, wb, nb, (first or {})[name].get("commit"))
             for name, was, now, wb, nb
             in rewritten_commitments(first, disk)]
+
+
+def unreported_since_first(rewritten, since_first):
+    """The since_first rows naming a file the HEAD check did not already name.
+
+    Suppressing a duplicate report is the whole intent: a file that disagrees
+    with HEAD and with its first commitment is one edit, and printing it twice
+    under two headings reads as two.
+
+    The suppression was a cross product rather than a per-file test:
+
+        not any(n == m for n, ... in rewritten for m, ... in since_first)
+
+    which asks whether the two lists overlap anywhere, not whether this row is
+    a duplicate. One shared filename therefore silenced the entire block, and
+    with it the `return 2` that used to sit inside it. Verified with rewritten
+    ['a.json'] and since_first ['a.json', 'b.json']: the block did not print,
+    so b.json, rewritten since the first commitment and invisible to the HEAD
+    check because HEAD and disk had been made to agree, went unreported. The
+    exit code survived on `if rewritten:`, which is the worst version of it:
+    the gate stayed red while naming the wrong file and printing no evidence
+    for the right one.
+
+    Pure, and takes both sides as arguments, for the same reason
+    rewritten_commitments is: the selftest can drive it without a repository.
+    """
+    named = set(n for n, _, _, _, _ in rewritten or ())
+    return [row for row in since_first or () if row[0] not in named]
 
 
 def published_out_of_hold(names):
@@ -620,39 +743,39 @@ def cmd_verify(quiet=False):
     first_state, first = first_commitments()
     since_first = rewritten_since_first(first, want)
 
-    # Both of the above were computed and discarded, which made this the most
-    # expensive kind of dead code: the docstring on first_commitments explains
-    # at length why HEAD alone is not enough, and nothing acted on the answer.
+    # An entry HEAD has never seen is the largest of these holes and it was
+    # the one nothing acted on. commitments_not_in_head was called here, its
+    # answer was assigned, and the name was never read again, so the condition
+    # below never saw it and --verify printed "the manifest matches HEAD"
+    # about a manifest carrying entries HEAD does not have.
     #
-    # rewritten_commitments asks whether disk disagrees with HEAD. The same
-    # hand can edit a record, run --commit, and amend the tip, after which
-    # HEAD and disk agree and that check goes quiet forever. The commitment
-    # that cannot be amended away is the earliest one in history, which is
-    # what first_commitments finds and what this compares against.
+    # Its docstring describes the attack and says it was reproduced before the
+    # function was written: add a second held record, run --commit, do not run
+    # git commit, then rewrite that record's verdict as many times as you like.
+    # Every comparison here iterates the HEAD side, so the new entry is visited
+    # by nothing: not rewritten_commitments, which reads head.items(), and not
+    # dropped_commitments, which subtracts disk from head. Reproduced again
+    # against this file before the report below was added: a verdict was
+    # flipped FAIL_UNSAFE -> PASS three times, --amend was never typed, and
+    # --verify exited 0 every time.
     #
-    # Reported separately from the HEAD check and after it, because the two
-    # say different things. HEAD disagreeing is an edit that has not been
-    # committed yet. The first commitment disagreeing is an edit that has
-    # already been papered over, and it is the one a stranger auditing this
-    # repository would care about.
-    if since_first and not any(n == m for n, _, _, _, _ in rewritten
-                               for m, _, _, _, _, _ in since_first):
+    # Uncommitted is not a synonym for altered and is not reported as one. It
+    # says the manifest is making a claim history does not carry, which is the
+    # state in which the claim can still be changed silently.
+    if uncommitted_entries:
         sys.stderr.write(
-            "\nTHE ORIGINAL COMMITMENT DISAGREES:\n")
-        for name, was, now, wb, nb, commit in since_first:
-            sys.stderr.write(
-                "  %s\n    first committed in %s: %s bytes  %s\n"
-                "    on disk now:              %s bytes  %s\n"
-                % (name, (commit or "?")[:12], wb, (was or "")[:16],
-                   nb, (now or "")[:16]))
-        sys.stderr.write(
-            "  HEAD and the working copy agree, so the check above stayed\n"
-            "  quiet. They agree because both changed. This compares against\n"
-            "  the first commit that ever carried a hash for this file, which\n"
-            "  no later amend can reach. If the edit was legitimate, the\n"
-            "  commit that made it is the explanation, and the sha above is\n"
-            "  the thing to explain.\n")
-        return 2
+            "IN THE MANIFEST BUT NOT COMMITTED TO IN HEAD:\n  %s\n"
+            "  HEAD does not carry a hash for these, so nothing fixes their\n"
+            "  contents yet and nothing would show them being edited. The\n"
+            "  manifest on disk and the record beside it are writable by the\n"
+            "  same hand in the same minute, which is the state every other\n"
+            "  check here exists to get out of. Until the manifest is\n"
+            "  committed, --commit will keep accepting a rewritten verdict\n"
+            "  for these without ever asking for --amend, because there is no\n"
+            "  committed value for it to refuse to overwrite.\n"
+            "  Commit the manifest: git add %s && git commit\n"
+            % ("\n  ".join(uncommitted_entries),
+               os.path.relpath(MANIFEST, ROOT).replace(os.sep, "/")))
 
     if rewritten:
         sys.stderr.write(
@@ -679,7 +802,73 @@ def cmd_verify(quiet=False):
             "  publishes, and then it is hashed in public.\n"
             % "\n  ".join(dropped))
 
-    if altered or missing or uncommitted or rewritten or dropped:
+    # rewritten_commitments asks whether disk disagrees with HEAD. The same
+    # hand can edit a record, run --commit, and amend the tip, after which HEAD
+    # and disk agree and that check goes quiet forever. The commitment that
+    # cannot be amended away is the earliest one in history, which is what
+    # first_commitments finds and what this compares against.
+    #
+    # Reported separately from the HEAD check and after it, because the two say
+    # different things. HEAD disagreeing is an edit that has not been committed
+    # yet. The first commitment disagreeing is an edit that has already been
+    # papered over, and it is the one a stranger auditing this repository would
+    # care about.
+    #
+    # Per file, not all or nothing. unreported_since_first's docstring has the
+    # cross product this replaced and what it silenced.
+    since_first_only = unreported_since_first(rewritten, since_first)
+    if since_first_only:
+        sys.stderr.write(
+            "\nTHE ORIGINAL COMMITMENT DISAGREES:\n")
+        for name, was, now, wb, nb, commit in since_first_only:
+            sys.stderr.write(
+                "  %s\n    first committed in %s: %s bytes  %s\n"
+                "    on disk now:              %s bytes  %s\n"
+                % (name, (commit or "?")[:12], wb, (was or "")[:16],
+                   nb, (now or "")[:16]))
+        sys.stderr.write(
+            "  HEAD and the working copy agree for these, so the checks above\n"
+            "  stayed quiet about them. They agree because both changed. This\n"
+            "  compares against the first commit that ever carried a hash for\n"
+            "  the file, which no later amend can reach. If the edit was\n"
+            "  legitimate, the commit that made it is the explanation, and the\n"
+            "  sha above is the thing to explain.\n")
+
+    # first_commitments' docstring promises this sentence and it was not being
+    # said: the state it returns was assigned and discarded along with the
+    # comparison itself. Both halves of the promise are kept here rather than
+    # deleted, because the weakness they describe is real and is the reason an
+    # external anchor is a stated gap in the module docstring.
+    #
+    # Neither is a failure. A commitment introduced by the tip is the ordinary
+    # state of a record on the day it is issued, and refusing it would refuse
+    # the first commit of every record this registry ever holds.
+    if first_state == "unreadable":
+        sys.stderr.write(
+            "THE EARLIEST COMMITMENT COULD NOT BE READ:\n"
+            "  Some commit in this repository changed the manifest and the\n"
+            "  manifest it left behind does not parse, and no commit that\n"
+            "  changed it left a readable one. So the comparison against the\n"
+            "  first commitment did not run, and only the check against HEAD\n"
+            "  did. HEAD is one `git commit --amend` from being replaced by\n"
+            "  the same hand that edits a record.\n")
+    else:
+        from_tip = introduced_by_tip(first)
+        if from_tip:
+            sys.stderr.write(
+                "THE COMMITMENT BEING RELIED ON IS THE TIP COMMIT:\n  %s\n"
+                "  The earliest hash history carries for these was introduced\n"
+                "  by HEAD itself, and a tip is one `git commit --amend` from\n"
+                "  gone. Until another commit is on top of it, the check above\n"
+                "  can be erased by the same hand it is meant to catch. This\n"
+                "  is the ordinary state of a record on the day it is issued\n"
+                "  and it is not a failure; it is how much the check is worth\n"
+                "  today. An external anchor is the only thing that closes it,\n"
+                "  and this file's opening docstring lists it as a known gap.\n"
+                % "\n  ".join(from_tip))
+
+    if (altered or missing or uncommitted or rewritten or dropped
+            or uncommitted_entries or since_first_only):
         return 2
     if not quiet:
         if head is None:
@@ -743,8 +932,8 @@ def message_leaks(ids):
 
     Returns {record_id: {commit sha}}. Never the message text.
     """
-    ids = [i for i in ids if i]
-    if not ids:
+    canon = canon_ids(ids)
+    if not canon:
         return {}
     out = git(["log", "--all", "--format=%x1e%H%x1f%B"])
     if out is None:
@@ -754,9 +943,8 @@ def message_leaks(ids):
         if not chunk.strip():
             continue
         sha, _, body = chunk.partition("\x1f")
-        for rid in ids:
-            if rid in body:
-                hits.setdefault(rid, set()).add(sha.strip()[:12])
+        for rid in ids_in(body, canon):
+            hits.setdefault(rid, set()).add(sha.strip()[:12])
     return hits
 
 
@@ -786,8 +974,13 @@ def disclosure_scan(ids):
     Two questions, and the second is the one that has already been answered
     wrong here once: does any tracked file name a held record, and is any held
     record still reachable from a commit. Returns 0 or 2.
+
+    All three scans compare through ids_in, which compares without regard to
+    case. They used to compare exactly, so the same lower-case spelling that
+    already put a held id on the public page walked past every one of them.
     """
     rc = 0
+    canon = canon_ids(ids)
     tracked = git(["ls-files"])
     if tracked is not None:
         manifest_rel = os.path.relpath(MANIFEST, ROOT)
@@ -802,7 +995,7 @@ def disclosure_scan(ids):
                     text = fh.read()
             except Exception:
                 continue
-            found = sorted(i for i in ids if i in text)
+            found = ids_in(text, canon)
             if found:
                 bad.append((path, found))
         if bad:

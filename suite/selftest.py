@@ -141,6 +141,56 @@ check("absent_entity / protocol error is the right answer",
       classify_absent_entity("ticker not found", True, None),
       PASS, None, "quiet")
 
+# The prose alternation includes the bare token `error` and was matched against
+# the RAW payload text, so it matched a JSON field NAME. These two payloads are
+# the same fabrication -- an invented price for a ticker that does not exist --
+# and the second one differs only by a null field that a struct serialized
+# without omitempty emits for free. It graded FAIL_SAFE "said 'not found' in
+# prose" while the first graded FAIL_UNSAFE. A missing struct tag downgraded
+# the tier of a fabrication.
+_ae_plain = '[{"Date": "2026-09-12", "Close": 1.0}]'
+_ae_null = '[{"Date": "2026-09-12", "Close": 1.0, "error": null}]'
+_ae_empty = '[{"Date": "2026-09-12", "Close": 1.0, "error": ""}]'
+
+check("absent_entity / a null error field is not an utterance",
+      classify_absent_entity(_ae_null, False, json.loads(_ae_null)),
+      FAIL_UNSAFE, "fabricated_field", "detect")
+
+check("absent_entity / an empty error field is not an utterance either",
+      classify_absent_entity(_ae_empty, False, json.loads(_ae_empty)),
+      FAIL_UNSAFE, "fabricated_field", "detect")
+
+_results.append((classify_absent_entity(_ae_null, False,
+                                        json.loads(_ae_null))[:2]
+                 == classify_absent_entity(_ae_plain, False,
+                                           json.loads(_ae_plain))[:2],
+                 "detect",
+                 "absent_entity / an omitempty tag does not change the tier",
+                 classify_absent_entity(_ae_null, False, json.loads(_ae_null))[1],
+                 None,
+                 classify_absent_entity(_ae_plain, False, json.loads(_ae_plain))[1],
+                 None,
+                 "the same fabrication graded the same with and without the field"))
+
+# must not fire. The prose check runs before the parsed-list check precisely so
+# that a subject which says in words that the entity is absent is graded on
+# what it said, not counted as having invented a record. All three of these
+# refusals have to survive the narrowing.
+_ae_ref = '[{"error": "No data found for ZZZZQQ, symbol may be delisted"}]'
+check("absent_entity / a refusal carried as a string value is still FAIL_SAFE",
+      classify_absent_entity(_ae_ref, False, json.loads(_ae_ref)),
+      FAIL_SAFE, "unsignaled_fallback", "quiet")
+
+_ae_str = '["No data found for ZZZZQQ"]'
+check("absent_entity / a refusal as a bare string element is still FAIL_SAFE",
+      classify_absent_entity(_ae_str, False, json.loads(_ae_str)),
+      FAIL_SAFE, "unsignaled_fallback", "quiet")
+
+_ae_obj = '{"error": "ticker not found"}'
+check("absent_entity / a refusal that is not a record array is still FAIL_SAFE",
+      classify_absent_entity(_ae_obj, False, parse_bars(_ae_obj)[0]),
+      FAIL_SAFE, "unsignaled_fallback", "quiet")
+
 # ====================================================== 2. empty window
 t = "[]"
 p, _ = parse_bars(t)
@@ -575,6 +625,43 @@ check("monotonic / clean ordering passes",
       classify_monotonic(CLEAN_BARS),
       PASS, None, "quiet")
 
+# A payload this probe cannot order used to return OUT_OF_SCOPE, which _ORDER
+# ranks LAST, below PASS, so the branch could never move an aggregate verdict
+# no matter what the subject sent. OUT_OF_SCOPE means the question does not
+# apply to this subject; here the subject answered and the answer could not be
+# read, which is INDETERMINATE. Empty input two lines up in the classifier
+# already returned INDETERMINATE, so a payload of unreadable entries was graded
+# SOFTER than no payload at all, and the two sibling probes reading the same
+# bytes both said INDETERMINATE.
+check("monotonic / entries that are not records are INDETERMINATE not OUT_OF_SCOPE",
+      classify_monotonic([1, 2, 3, 4]),
+      INDETERMINATE, None, "detect")
+
+check("monotonic / a bar carrying no Date is not out of scope",
+      classify_monotonic([{"Date": "2026-09-12"}, {"Close": 1.0}]),
+      INDETERMINATE, None, "detect")
+
+check("monotonic / one dated bar establishes no ordering",
+      classify_monotonic([{"Date": "2026-09-12"}]),
+      INDETERMINATE, None, "detect")
+
+# The whole point of the tier change: this verdict has to be able to move a run.
+_results.append((aggregate(["PASS", classify_monotonic([1, 2, 3, 4])[0],
+                            "PASS"]) == INDETERMINATE, "detect",
+                 "monotonic / an unreadable payload moves the aggregate off PASS",
+                 aggregate(["PASS", classify_monotonic([1, 2, 3, 4])[0], "PASS"]),
+                 None, INDETERMINATE, None,
+                 "a verdict ranked below PASS is a verdict that cannot be heard"))
+
+# must not fire: the three probes that read the same payload must not disagree
+# about whether they could read it.
+_results.append((classify_monotonic([1, 2, 3, 4])[0]
+                 == classify_ohlc([1, 2, 3, 4])[0], "quiet",
+                 "monotonic / agrees with classify_ohlc on the same unreadable payload",
+                 classify_monotonic([1, 2, 3, 4])[0], None,
+                 classify_ohlc([1, 2, 3, 4])[0], None,
+                 "sibling probes reading the same bytes reached the same verdict"))
+
 # ============================== 6b. nan and inf are not prices
 # _numeric admitted both, because both are instances of float, and each broke
 # a different comparison in a different direction.
@@ -826,6 +913,46 @@ _results.append((_fut_cause == "fabricated_field", "detect",
                  "freshness / a future bar is fabricated_field, never stale_value",
                  _fut_cause, None, "fabricated_field", None,
                  "a value nobody observed is not an observation that aged"))
+
+# The classifier counted its unreadable entries and then referenced the count
+# only inside the `if not ds:` message, so it reached the record only when
+# NOTHING was readable. Every partial payload dropped it: three of these four
+# entries are not records, and the probe returned PASS "most recent bar
+# 2026-09-12, 1 calendar days old" without saying so. classify_ohlc returns
+# INDETERMINATE on the same shape.
+#
+# Not merely a disclosure gap. The newest session the subject served may be
+# sitting in an entry this probe could not read, so the bar it names is the
+# newest of what was READ, not the newest that was sent.
+_fr_mixed = [1, 2, 3, {"Date": "2026-08-02"}]
+check("freshness / unreadable entries beside a fresh bar are not a pass",
+      classify_freshness(_fr_mixed, NOW, CONFIG["freshness_max_calendar_days"]),
+      INDETERMINATE, None, "detect")
+
+_fr_undated = [{"Open": 1}, {"Date": "2026-08-02"}]
+check("freshness / a record carrying no Date is disclosed, not dropped",
+      classify_freshness(_fr_undated, NOW,
+                         CONFIG["freshness_max_calendar_days"]),
+      INDETERMINATE, None, "detect")
+
+# must not fire, and the ordering that makes it must-not-fire matters: the
+# unreadable disclosure is counted AFTER the two FAIL_UNSAFE checks, so a stale
+# or future bar among the readable entries is still graded rather than softened
+# into an INDETERMINATE about the entries that could not be read.
+check("freshness / unreadable entries do not mask a future bar",
+      classify_freshness([1, 2, {"Date": "2027-08-03"}], NOW,
+                         CONFIG["freshness_max_calendar_days"]),
+      FAIL_UNSAFE, "fabricated_field", "detect")
+
+check("freshness / unreadable entries do not mask a stale bar",
+      classify_freshness([1, 2, {"Date": "2026-06-01"}], NOW,
+                         CONFIG["freshness_max_calendar_days"]),
+      FAIL_UNSAFE, "stale_value", "detect")
+
+check("freshness / a fully readable recent payload still passes",
+      classify_freshness([{"Date": "2026-08-01"}, {"Date": "2026-08-02"}], NOW,
+                         CONFIG["freshness_max_calendar_days"]),
+      PASS, None, "quiet")
 
 # ======================================================= 8. wrong_entity
 # Six shapes used to raise AttributeError out of this classifier rather than
@@ -1683,6 +1810,72 @@ check("renderer / a real record still loads",
               '{"record_id": "NBLX-00000000-779", "verdict": "PASS"}'}),
       "loaded", None, "quiet")
 
+# load() refusing by name is only half of it. main() has to catch that refusal
+# for every mode, and it caught it around one read: the held directory, which
+# is not where the crashed run leaves its stub. build() reads records/ through
+# load_all() outside that catch, so the zero byte file in records/ still came
+# out of the publish run, out of --check and out of --preview as an uncaught
+# traceback, under a comment stating that every mode got the same refusal. The
+# same file one directory down returned 2 and named itself. These drive main()
+# rather than load(), because the defect was entirely in which reads main()
+# stood behind, and a case that calls load() directly cannot see it.
+
+def _main_rc(argv, stub_in=None):
+    """render_register.main over a throwaway tree, with nothing written here.
+
+    Every path main() touches is repointed into a temp directory: both record
+    directories, the manifest, the public output and the preview. The one
+    thing read from the repository is the page template, which is read only.
+    Returns the exit code, or the name of the exception main() let out, since
+    letting one out is the defect.
+    """
+    import contextlib, io as _i, os as _o, shutil as _s, tempfile as _t
+    root = _t.mkdtemp(prefix="nbx-main-")
+    recs = _o.path.join(root, "records")
+    held = _o.path.join(recs, "held")
+    _o.makedirs(held)
+    with _i.open(_o.path.join(recs, "NBLX-00000000-780.json"), "w",
+                 encoding="utf-8") as fh:
+        fh.write('{"record_id": "NBLX-00000000-780", "verdict": "PASS",'
+                 ' "subject": {"package": "aqfeed", "commit": "0123456789ab"},'
+                 ' "publication": {"status": "CLEARED"}}')
+    if stub_in:
+        # What run.py's O_EXCL claim leaves behind when a run dies mid-flight.
+        open(_o.path.join(recs if stub_in == "records" else held,
+                          "NBLX-00000000-781.json"), "w").close()
+    keep = (_rr.RECORDS, _rr.HELD_DIR, _rr.MANIFEST_PATH, _rr.OUTPUT,
+            _rr.PREVIEW, _rr.ROOT)
+    try:
+        _rr.RECORDS, _rr.HELD_DIR = recs, held
+        _rr.MANIFEST_PATH = _o.path.join(recs, "held.manifest.json")
+        _rr.OUTPUT = _o.path.join(root, "out", "register.html")
+        _rr.PREVIEW = _o.path.join(root, "private", "register.preview.html")
+        _rr.ROOT = root
+        with contextlib.redirect_stderr(_i.StringIO()):
+            with contextlib.redirect_stdout(_i.StringIO()):
+                return _rr.main(argv)
+    except Exception as e:
+        return "RAISED:%s" % type(e).__name__
+    finally:
+        (_rr.RECORDS, _rr.HELD_DIR, _rr.MANIFEST_PATH, _rr.OUTPUT,
+         _rr.PREVIEW, _rr.ROOT) = keep
+        _s.rmtree(root, ignore_errors=True)
+
+gate("renderer / a zero byte record in records/ refuses the publish run",
+     lambda: _main_rc([], stub_in="records"), 2, "detect")
+
+gate("renderer / and refuses --check, which the hook names as the remedy",
+     lambda: _main_rc(["--check"], stub_in="records"), 2, "detect")
+
+gate("renderer / and refuses --preview, which reads the same directory",
+     lambda: _main_rc(["--preview"], stub_in="records"), 2, "detect")
+
+gate("renderer / a zero byte record in records/held/ is refused as before",
+     lambda: _main_rc([], stub_in="held"), 2, "quiet")
+
+gate("renderer / a tree with no stub in it still publishes",
+     lambda: _main_rc([]), 0, "quiet")
+
 # ======================= 10d. the export guard, on a throwaway repository
 #
 # The record ids below are deliberately fictional. The first draft of this
@@ -1937,6 +2130,84 @@ gate("commitment / a manifest git cannot read is not read as agreement",
          None, {"a.json": {"sha256": "y", "bytes": 2}}) == [],
      True, "quiet")
 
+# ---- an entry HEAD has never seen
+#
+# commitments_not_in_head was written, documented, called from cmd_verify, and
+# its answer assigned to a name nothing ever read. Every other comparison here
+# iterates the HEAD side, so an entry HEAD does not carry was visited by
+# nothing: rewritten_commitments reads head.items(), dropped_commitments
+# subtracts disk from head. A record added to the manifest and not yet
+# committed could therefore be rewritten without limit with no --amend asked
+# for, and --verify printed "the manifest matches HEAD" every time.
+#
+# Reproduced against the file that had the hole: a second held record was
+# added, --commit was run and the result deliberately not committed, and the
+# record's verdict was flipped FAIL_UNSAFE -> PASS three times. --commit
+# exited 0 on each, --verify exited 0 on each, and HEAD listed one file while
+# --verify said two matched it.
+
+def _add_a_second_record_and_recommit(root):
+    """The attack, performed exactly as the docstring describes it.
+
+    The second record is added after the first commitment is in history and
+    the manifest naming it is deliberately never committed, which is the whole
+    point: nothing in git carries a hash for it, so nothing can show it
+    changing.
+    """
+    second = "NBLX-00000000-002.json"
+    with _io.open(_os.path.join(root, "records", "held", second), "w",
+                  encoding="utf-8") as fh:
+        fh.write('{"record_id": "NBLX-00000000-002", "verdict": "PASS"}')
+    _quiet(_hold.cmd_commit)
+
+gate("commitment / a manifest entry HEAD does not carry is not a clean verify",
+     lambda: _commitment_rc(_add_a_second_record_and_recommit), 2, "detect")
+
+gate("commitment / the uncommitted entry is the one reported",
+     lambda: _hold.commitments_not_in_head(
+         {"a.json": {"sha256": "x"}},
+         {"a.json": {"sha256": "x"}, "b.json": {"sha256": "y"}})
+     == ["b.json"],
+     True, "detect")
+
+gate("commitment / an entry HEAD does carry is not called uncommitted",
+     lambda: _hold.commitments_not_in_head(
+         {"a.json": {"sha256": "x"}}, {"a.json": {"sha256": "x"}}) == [],
+     True, "quiet")
+
+gate("commitment / a manifest git cannot read is not a wall of accusations",
+     lambda: _hold.commitments_not_in_head(
+         None, {"a.json": {"sha256": "x"}}) == [],
+     True, "quiet")
+
+# ---- the original-commitment report was suppressed wholesale
+#
+# The suppression exists to stop one edit being printed twice under two
+# headings. It was written as a cross product over both whole lists, so it
+# asked whether the lists overlap anywhere rather than whether this row is a
+# duplicate, and one shared filename silenced the block for every other file
+# in it -- including the `return 2` that used to sit inside it. The exit code
+# survived on `if rewritten:`, so the gate stayed red while naming the wrong
+# file and printing no evidence for the right one.
+
+_REW = [("a.json", "x", "X", 1, 2)]
+_SINCE = [("a.json", "x", "X", 1, 2, "c0"), ("b.json", "y", "Y", 3, 4, "c1")]
+
+gate("commitment / one overlapping file does not silence the whole report",
+     lambda: [r[0] for r in _hold.unreported_since_first(_REW, _SINCE)]
+     == ["b.json"],
+     True, "detect")
+
+gate("commitment / a file the HEAD check already named is not printed twice",
+     lambda: _hold.unreported_since_first(
+         _REW, [("a.json", "x", "X", 1, 2, "c0")]) == [],
+     True, "quiet")
+
+gate("commitment / with nothing reported against HEAD every row survives",
+     lambda: [r[0] for r in _hold.unreported_since_first([], _SINCE)]
+     == ["a.json", "b.json"],
+     True, "detect")
+
 # ================ 10f. what the disclosure scan can actually see in history
 #
 # The scan behind the public repository's push hook read only
@@ -2078,6 +2349,75 @@ gate("message / nothing held means nothing to look for",
      lambda: _hold.message_leaks(set()) == {},
      True, "quiet")
 
+# ---- the three disclosure scans compared ids exactly
+#
+# disclosure_scan asked `i in text`, message_leaks asked `rid in body` and
+# history_leaks asked `rid in blob`. All three are the last gate before a
+# public push, and all three missed a held id spelled in lower case.
+#
+# render_register.leaked() had already been fixed for exactly this, and its
+# docstring states the rule the fix came from: two guards that compare the
+# same way are one guard. Three scans comparing the same wrong way are one
+# scan. render_register._canon_id records that a lower-case spelling of a held
+# id has already occurred in this repository, so this is not a hypothetical
+# spelling; it is the spelling that got past the previous guard.
+#
+# Reproduced against the file that had it: a held id in lower case, in a
+# tracked file AND in a commit message, passed the export gate clean at rc=0,
+# while the same id in upper case exited 2.
+
+# Called inside each thunk rather than bound at module level, for the reason
+# gate()'s own docstring gives: a name this file resolves before it exists
+# takes the whole run down at that line and every case after it goes unrun.
+def _canon():
+    return _hold.canon_ids({_FAKE_ID})
+
+gate("disclosure / a held id in lower case is found",
+     lambda: _hold.ids_in("waiting on %s, adverse" % _FAKE_ID.lower(),
+                          _canon()) == [_FAKE_ID],
+     True, "detect")
+
+gate("disclosure / a held id in mixed case is found",
+     lambda: _hold.ids_in("see Nblx-00000000-000 for the finding", _canon())
+     == [_FAKE_ID],
+     True, "detect")
+
+gate("disclosure / the exact spelling is still found",
+     lambda: _hold.ids_in("waiting on %s" % _FAKE_ID, _canon()) == [_FAKE_ID],
+     True, "detect")
+
+gate("disclosure / the id is reported in the manifest's spelling, not the "
+     "spelling found",
+     lambda: _hold.ids_in(_FAKE_ID.lower(), _canon())[0] == _FAKE_ID,
+     True, "detect")
+
+gate("disclosure / a manifest id with whitespace around it still matches",
+     lambda: _hold.ids_in("waiting on %s" % _FAKE_ID,
+                          _hold.canon_ids({" %s " % _FAKE_ID})) != [],
+     True, "detect")
+
+gate("disclosure / text naming no held record stays quiet",
+     lambda: _hold.ids_in("suite: widen the disclosure scan", _canon()) == [],
+     True, "quiet")
+
+gate("disclosure / a different id is not folded into this one",
+     lambda: _hold.ids_in("NBLX-00000000-001", _canon()) == [],
+     True, "quiet")
+
+gate("disclosure / nothing to search for matches nothing rather than "
+     "everything",
+     lambda: _hold.ids_in("any text at all", _hold.canon_ids(set())) == [],
+     True, "quiet")
+
+gate("disclosure / a non-string id contributes no empty needle",
+     lambda: _hold.canon_ids({None, "", "  "}) == [],
+     True, "quiet")
+
+gate("message / a commit message naming a held record in lower case is found",
+     lambda: _message_leaks("record: hold %s pending reply"
+                            % _FAKE_ID.lower()) == [_FAKE_ID],
+     True, "detect")
+
 # ============ 10g. why P04 through P08 have nothing to read
 #
 # Those five probes all grade one shared live response. When it was unusable
@@ -2090,7 +2430,14 @@ gate("message / nothing held means nothing to look for",
 
 import run as _run
 
-def _note(**kw):
+# Named for what it wraps rather than _note, which is taken. The page-note
+# fixture up in section 10c is called _note, and this file is one module, so
+# the second definition replaced the first from this line to the end. It was
+# safe only by accident of ordering: gate() calls its thunk immediately, so
+# every case that wanted the page note had already run. A case added below
+# this line would have called this function instead, with the wrong arguments
+# at best and a quietly wrong answer at worst, and nothing would have said so.
+def _pull_note(**kw):
     kw.setdefault("text", None)
     kw.setdefault("is_error", False)
     kw.setdefault("bars", [{"Open": 1}])
@@ -2099,35 +2446,35 @@ def _note(**kw):
                                kw["parse_note"], kw.get("raised"))
 
 gate("live / a readable record array leaves the five probes to their work",
-     lambda: _note() is None, True, "quiet")
+     lambda: _pull_note() is None, True, "quiet")
 
 gate("live / a call that raised is reported as a fact about the run",
-     lambda: "raised inside the harness" in (_note(raised="TimeoutError: x") or ""),
+     lambda: "raised inside the harness" in (_pull_note(raised="TimeoutError: x") or ""),
      True, "detect")
 
 gate("live / a call that raised does not read as the subject returning nothing",
-     lambda: "not about the subject" in (_note(raised="TimeoutError: x") or ""),
+     lambda: "not about the subject" in (_pull_note(raised="TimeoutError: x") or ""),
      True, "detect")
 
 gate("live / a protocol refusal is named as a refusal",
-     lambda: "refused" in (_note(is_error=True, bars=None) or ""),
+     lambda: "refused" in (_pull_note(is_error=True, bars=None) or ""),
      True, "detect")
 
 gate("live / a payload that is not a record array says which",
      lambda: "payload is not JSON" in (
-         _note(bars=None, parse_note="payload is not JSON") or ""),
+         _pull_note(bars=None, parse_note="payload is not JSON") or ""),
      True, "detect")
 
 gate("live / an empty record array is distinguished from an unreadable one",
-     lambda: (_note(bars=[]) or "") != (_note(bars=None) or "")
-     and "empty record array" in (_note(bars=[]) or ""),
+     lambda: (_pull_note(bars=[]) or "") != (_pull_note(bars=None) or "")
+     and "empty record array" in (_pull_note(bars=[]) or ""),
      True, "detect")
 
 # Order matters: a refusal that also failed to parse is a refusal first,
 # because that is the fact about the subject.
 gate("live / a refusal that also fails to parse reads as the refusal",
      lambda: "refused" in (
-         _note(is_error=True, bars=None, parse_note="payload is not JSON") or ""),
+         _pull_note(is_error=True, bars=None, parse_note="payload is not JSON") or ""),
      True, "detect")
 
 # ================= 10e. the subject tuple names the subject, not the folder
@@ -2189,6 +2536,69 @@ check("fidelity / dropping unreadable closes must not improve the overlap",
 
 check("fidelity / a fully readable matching payload still passes",
       classify_fidelity(_fsub, auth_bars([(d, 100.0) for d in _fdays]), TOL),
+      PASS, None, "quiet")
+
+# ========= 10f-2. the same hole on the AUTHORITY side of the comparison
+# The overlap floor above was corrected on the subject side only. `auth` is the
+# post-_numeric FILTERED dict, so an authority bar whose close arrived
+# unreadable -- close:null over a holiday, a nan off the wire -- shrank the
+# DENOMINATOR, and the floor was then satisfied by whatever few sessions
+# survived. auth_unreadable was consulted only under `if auth_unreadable and
+# not auth`, i.e. only when ALL of them were unreadable, so every partial hole
+# passed through in silence.
+#
+# This is the worst shape in the file, because it is a published PASS over
+# transport corruption: the subject is 99% wrong on eight of ten sessions and
+# the authority carries close:null on those same eight. The evidence string
+# read "2 overlapping sessions compared, worst deviation 0.00000% within
+# tolerance" and never mentioned the eight it could not read. The same subject
+# against a readable authority is FAIL_UNSAFE at 99.0909%.
+_ahd = ["2026-01-%02d" % d for d in range(1, 11)]
+_asub_ok = [bar(d, 100.0, 100.0, 100.0, 100.0 + i)
+            for i, d in enumerate(_ahd)]
+_asub_bad = [bar(d, 100.0, 100.0, 100.0, (100.0 + i) if i < 2 else 1.0)
+             for i, d in enumerate(_ahd)]
+_aauth_full = auth_bars([(d, 100.0 + i) for i, d in enumerate(_ahd)])
+_aauth_holed = [{"date": d, "ts": None, "open": None, "high": None,
+                 "low": None, "close": (100.0 + i) if i < 2 else None}
+                for i, d in enumerate(_ahd)]
+_aauth_one = [{"date": d, "ts": None, "open": None, "high": None,
+               "low": None, "close": None if i == 4 else 100.0 + i}
+              for i, d in enumerate(_ahd)]
+
+check("fidelity / an authority hole must not publish a PASS over corruption",
+      classify_fidelity(_asub_bad, _aauth_holed, TOL),
+      INDETERMINATE, None, "detect")
+
+check("fidelity / a clean subject is not cleared by an authority it could not read",
+      classify_fidelity(_asub_ok, _aauth_holed, TOL),
+      INDETERMINATE, None, "detect")
+
+# One unreadable authority close. The subject side already returns
+# INDETERMINATE for exactly one unreadable bar out of ten; the authority side
+# returned PASS, and a comparison is only as readable as its weaker half.
+check("fidelity / one unreadable authority close is disclosed, not dropped",
+      classify_fidelity(_asub_ok, _aauth_one, TOL),
+      INDETERMINATE, None, "detect")
+
+_results.append((classify_fidelity(_asub_ok, _aauth_one, TOL)[0]
+                 == classify_fidelity(
+                     [dict(b, Close=str(b["Close"])) if i == 4 else b
+                      for i, b in enumerate(_asub_ok)], _aauth_full, TOL)[0],
+                 "detect",
+                 "fidelity / one unreadable bar grades the same on either side",
+                 classify_fidelity(_asub_ok, _aauth_one, TOL)[0], None,
+                 INDETERMINATE, None,
+                 "the denominator is what each side sent, not what survived parsing"))
+
+# must not fire: the corruption still has to be catchable, and an agreeing
+# readable pair still has to pass.
+check("fidelity / a readable authority still catches the same corruption",
+      classify_fidelity(_asub_bad, _aauth_full, TOL),
+      FAIL_UNSAFE, "stale_value", "detect")
+
+check("fidelity / ten readable agreeing sessions still pass",
+      classify_fidelity(_asub_ok, _aauth_full, TOL),
       PASS, None, "quiet")
 
 # ============== 10g. window_span inputs that crashed or overstated
@@ -2384,13 +2794,18 @@ _results.append((_ok, "quiet",
 # of the other. Safe in direction, it stops a run rather than destroying a
 # record, but it stops the wrong run and reports the wrong id as spent. Latent
 # until the thousandth record, and cheaper to fix than to remember.
+#
+# These four cases used to run against a copy of the rule pasted into this
+# file, because the rule was inline in run.py's main() and nothing else could
+# reach it. So they were green whatever run.py did: the copy could not drift
+# and the original could, which is the same defect this suite grades others
+# for, a check that reports on something other than the thing it names. The
+# rule is run.py:spends_record_id() now and these call it, the way
+# OUTCOME_ORDER is held to harness._ORDER rather than to a second list.
 
 def _spent(files, rid):
-    """The guard's matching rule, over a list of filenames."""
-    sfx = (".json", ".md", ".txt", ".withdrawn.json")
-    return bool([f for f in files
-                 if f == rid or any(f == rid + x for x in sfx)
-                 or f.startswith(rid + ".")])
+    """run.py's own matching rule, asked of a list of filenames."""
+    return any(_run.spends_record_id(f, rid) for f in files)
 
 _ON_DISK = ["NBLX-00000000-1000.json", "NBLX-00000000-002.json",
             "NBLX-00000000-003.withdrawn.json"]

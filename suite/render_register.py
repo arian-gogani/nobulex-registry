@@ -1189,6 +1189,42 @@ def targets(argv):
 
 
 def main(argv):
+    """Every mode, behind one refusal for a record that cannot be read.
+
+    load() refuses by name rather than raising a JSONDecodeError out of here,
+    and the catch belongs around the whole run, because the modes do not read
+    the same directories. It used to sit around the held-directory read alone,
+    while build() reads records/ and records/held/ through load_all() and
+    build() is called after it. So the artefact the refusal was written for,
+    the zero byte stub run.py's O_EXCL claim leaves in records/ when a run
+    dies mid-flight, still came out of the publish run as an uncaught
+    traceback, and out of --check and --preview the same way. The comment
+    there said every mode got the same refusal. Every mode got it for the one
+    directory that does not produce the artefact.
+
+    Fail closed either way: a traceback wrote nothing, so nothing published a
+    count it could not compile. What was missing was the part an operator can
+    act on. The pre-push hook names this renderer as the remedy for the
+    crashed run, and naming the file says which record cannot be read, where
+    a traceback says only that the remedy is broken too.
+
+    "Nothing was written" is a true sentence here because load() is the only
+    thing that raises this, every load happens before the first write in
+    every mode, and both write paths write the page they were handed.
+    """
+    try:
+        return render(argv)
+    except UnreadableRecord as e:
+        sys.stderr.write(
+            "REFUSED: %s\n"
+            "  Nothing was written. The register is compiled from the\n"
+            "  records, so a record this cannot read is a count it cannot\n"
+            "  make, and publishing a smaller number quietly is the failure\n"
+            "  this gate exists to prevent.\n" % e)
+        return 2
+
+
+def render(argv):
     # Before anything is read for rendering, and before --check compares the
     # published copies against a build, confirm this checkout can actually see
     # the records it is about to compile a count from. Rendering from a
@@ -1203,21 +1239,12 @@ def main(argv):
             "  suite/hold.py --commit where the records live to rewrite it.\n"
             % os.path.relpath(MANIFEST_PATH, ROOT))
         return 2
-    # load() refuses by name on anything in records/ it cannot read, rather
-    # than raising a JSONDecodeError out of main. Caught here so every mode
-    # gets the same refusal, including the plain publish run that the
-    # pre-push hook tells an operator to use as its remedy.
-    try:
-        absent = missing_held(committed, set(
-            r.get("record_id") for _, r in load(HELD_DIR)))
-    except UnreadableRecord as e:
-        sys.stderr.write(
-            "REFUSED: %s\n"
-            "  Nothing was written. The register is compiled from the\n"
-            "  records, so a record this cannot read is a count it cannot\n"
-            "  make, and publishing a smaller number quietly is the failure\n"
-            "  this gate exists to prevent.\n" % e)
-        return 2
+    # An unreadable record raises out of this read and out of build()'s below,
+    # and main() catches both. It is caught there rather than here so that the
+    # refusal covers the directory that produces the artefact as well as the
+    # one this check happens to read.
+    absent = missing_held(committed, set(
+        r.get("record_id") for _, r in load(HELD_DIR)))
     if absent:
         sys.stderr.write(
             "REFUSED: the manifest commits to %d held record%s and %d of them\n"

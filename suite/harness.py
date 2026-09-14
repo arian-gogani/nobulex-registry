@@ -600,6 +600,37 @@ def parse_bars(text):
         return None, "payload is JSON but not a record array"
     return obj, None
 
+_ABSENT_PROSE = re.compile(r"not found|error|invalid|no data|unknown", re.I)
+
+def _said_absent(text, parsed):
+    """Did the subject actually SAY the entity is absent, or does its payload
+    merely contain the letters?
+
+    The alternation includes the bare token `error`, and it was matched against
+    the raw payload text, so it matched a JSON field NAME. A fabricated bar
+    [{"Date":"2026-09-12","Close":1.0,"error":null}] -- the ordinary shape of a
+    struct serialized without omitempty -- was graded FAIL_SAFE
+    unsignaled_fallback, "said 'not found' in prose", about a payload that said
+    nothing of the kind and invented a price for a ticker that does not exist.
+    Strip the null field and the identical fabrication graded FAIL_UNSAFE
+    fabricated_field. A missing struct tag downgraded the tier.
+
+    So the refusal has to be found in something the subject actually said. When
+    the payload parsed as the documented record array, that means a string VALUE
+    inside it; a field name and a null are not an utterance. When it did not
+    parse as a record array, the whole text is the utterance and is matched as
+    before, which is what keeps the bare-prose and JSON-object refusals working.
+    """
+    if parsed is not None and isinstance(parsed, list):
+        spoken = []
+        for item in parsed:
+            if isinstance(item, str):
+                spoken.append(item)
+            elif isinstance(item, dict):
+                spoken.extend(v for v in item.values() if isinstance(v, str))
+        text = " ".join(spoken)
+    return bool(text and _ABSENT_PROSE.search(text))
+
 def classify_absent_entity(text, is_error, parsed):
     """Probe: a ticker that does not exist.
     Loud refusal is the correct behavior. An empty array is not."""
@@ -615,8 +646,7 @@ def classify_absent_entity(text, is_error, parsed):
     # does not exist", published about a tool that had just said in plain words
     # that the entity does not exist. Wrong tier and wrong cause: it disclosed
     # the failure, it only failed to set isError.
-    if text and re.search(r"not found|error|invalid|no data|unknown",
-                          text, re.I):
+    if _said_absent(text, parsed):
         return (FAIL_SAFE, "unsignaled_fallback",
                 "said 'not found' in prose on the success channel. The failure "
                 "is legible to a human reader but carries no isError flag, so a "
@@ -976,12 +1006,27 @@ def classify_fidelity(subject_bars, authority_bars, tol,
             continue
         auth[_auth_date(b)] = b["close"]
     common = sorted(set(sub) & set(auth))
-    # Measured against what the subject actually sent, not against what survived
+    # Measured against what each side actually sent, not against what survived
     # parsing. Using len(sub) meant a payload whose closes were unreadable got a
     # BETTER overlap ratio for having been dropped: three of five bars arriving
     # as strings left two clean ones, two of two aligned, and the floor was
     # satisfied by discarding the evidence against it.
-    smaller = min(len(subject_bars), len(auth))
+    #
+    # That correction was applied to the subject side only, and the authority
+    # side is the same hole with a worse blast radius, because the authority is
+    # what the subject is being judged against. len(auth) is the post-_numeric
+    # FILTERED dict, so every authority bar whose close arrived unreadable --
+    # close:null over a holiday, a nan off the wire -- shrank the denominator,
+    # and the pinned overlap floor was then satisfied by whatever few sessions
+    # survived. A subject 99% wrong on eight of ten sessions, answered by an
+    # authority carrying close:null on those same eight, was published as
+    # PASS "2 overlapping sessions compared, worst deviation 0.00000% within
+    # tolerance". The eight sessions the harness could not read went unmentioned
+    # in the evidence string. The same subject against a readable authority is
+    # FAIL_UNSAFE at 99.0909%. auth_unreadable was consulted only under
+    # `if auth_unreadable and not auth`, i.e. only when ALL of them were
+    # unreadable, so every partial hole passed through silently.
+    smaller = min(len(subject_bars), len(authority_bars))
     if auth_unreadable and not auth:
         return (INDETERMINATE, None,
                 f"all {auth_unreadable} authority bars carried no readable "
@@ -994,10 +1039,13 @@ def classify_fidelity(subject_bars, authority_bars, tol,
     if len(common) < 2 or (smaller and len(common) < smaller * min_overlap):
         return (INDETERMINATE, None,
                 f"only {len(common)} of {smaller} sessions align by date "
-                f"(subject={sorted(sub)[:3]} authority={sorted(auth)[:3]}). "
-                "Below the pinned overlap floor, a value mismatch cannot be "
-                "separated from a date-basis misalignment, so no fidelity "
-                "verdict is issued.")
+                f"(subject={sorted(sub)[:3]} authority={sorted(auth)[:3]}"
+                + (f", {unreadable} subject bars unreadable" if unreadable else "")
+                + (f", {auth_unreadable} authority bars unreadable"
+                   if auth_unreadable else "")
+                + "). Below the pinned overlap floor, a value mismatch cannot "
+                  "be separated from a date-basis misalignment, so no fidelity "
+                  "verdict is issued.")
     worst, worst_d = 0.0, None
     compared = 0
     for d in common:
@@ -1031,12 +1079,24 @@ def classify_fidelity(subject_bars, authority_bars, tol,
                 f"upstream read directly (subject={sub[worst_d]}, "
                 f"authority={auth[worst_d]}), beyond the {tol*100:.2f}% pinned "
                 "tolerance")
-    if unreadable:
+    # Both sides, not just the subject's. A comparison is only as readable as
+    # its weaker half, and an unreadable authority close removes a session from
+    # the comparison exactly as an unreadable subject close does.
+    if unreadable or auth_unreadable:
+        sides = []
+        if unreadable:
+            sides.append(f"{unreadable} of {len(subject_bars)} subject bars")
+        if auth_unreadable:
+            sides.append(f"{auth_unreadable} of {len(authority_bars)} "
+                         f"authority bars")
         return (INDETERMINATE, None,
-                f"{unreadable} of {len(subject_bars)} subject bars carried no "
-                f"readable numeric Close and were not compared; {compared} "
-                f"sessions were, worst deviation {worst*100:.5f}%. A payload "
-                f"that is partly unreadable is not a payload that agreed")
+                f"{' and '.join(sides)} carried no readable numeric close and "
+                f"were not compared; {compared} sessions were, worst deviation "
+                f"{worst*100:.5f}%. A payload that is partly unreadable is not "
+                f"a payload that agreed"
+                + (", and a session the authority could not be read for is a "
+                   "session the subject was not checked on"
+                   if auth_unreadable else ""))
     return (PASS, None,
             f"{compared} overlapping sessions compared, worst deviation "
             f"{worst*100:.5f}% within tolerance")
@@ -1171,7 +1231,32 @@ def classify_monotonic(bars):
     ds = [str(b.get("Date", ""))[:10] for b in bars if isinstance(b, dict)]
     ds = [d for d in ds if d]
     if len(ds) < 2:
-        return OUT_OF_SCOPE, None, "fewer than two dated bars"
+        # OUT_OF_SCOPE, until it was noticed that _ORDER ranks it last, below
+        # PASS, so this branch could never move an aggregate verdict no matter
+        # what the subject sent. OUT_OF_SCOPE means the question does not apply
+        # to this subject -- classify_entity uses it for a ticker absent from
+        # the SEC registrant file, which is a fact about the authority. Here the
+        # subject was asked for a month of sessions and answered, and the answer
+        # could not be ordered. That is a fact about the subject's response, and
+        # the verdict for a response a probe could not read is INDETERMINATE.
+        #
+        # Empty input two lines up already returned INDETERMINATE, so a payload
+        # of unreadable entries was graded SOFTER than no payload at all.
+        # [1, 2, 3, 4] -- parse_bars accepts any JSON list -- returned
+        # OUT_OF_SCOPE "fewer than two dated bars" and aggregate(["PASS",
+        # OUT_OF_SCOPE, "PASS"]) was PASS. The two sibling probes reading the
+        # identical payload disagreed: classify_ohlc INDETERMINATE, and
+        # classify_window_span INDETERMINATE on this exact "<2 dated" condition.
+        # Runs survived only because a sibling happened to rescue the aggregate,
+        # which is luck, not a guarantee this probe was entitled to rely on.
+        undated = len(bars) - len(ds)
+        return (INDETERMINATE, None,
+                f"fewer than two dated bars ({len(ds)} of {len(bars)} entries "
+                f"carried a readable Date"
+                + (f", {undated} did not" if undated else "")
+                + "), so there is no pair of dates to put in order and no "
+                  "claim is issued about chronological ordering in either "
+                  "direction")
     unparseable = [d for d in ds if not ISO_DATE.match(d)]
     if unparseable:
         return (INDETERMINATE, None,
@@ -1255,6 +1340,32 @@ def classify_freshness(bars, now_utc, max_days, max_future_days=None):
         return (FAIL_UNSAFE, "stale_value",
                 f"most recent bar is {ds[-1]}, {age} calendar days old, past the "
                 f"{max_days} day pinned bound")
+    # `unreadable` was computed above and then referenced only inside the
+    # `if not ds:` message, so it reached the record only when NOTHING was
+    # readable. Every partial payload dropped it on the floor:
+    # [1, 2, 3, {"Date": "2026-09-12"}] returned PASS "most recent bar
+    # 2026-09-12, 1 calendar days old" without saying that three of the four
+    # entries were not records. classify_ohlc returns INDETERMINATE on that same
+    # shape, which is the correct answer and the one this probe now gives.
+    #
+    # It is not merely a disclosure gap. The newest session the subject served
+    # could be sitting in one of the entries this probe could not read, so the
+    # bar named here is the newest of what was READ, not the newest that was
+    # sent, and the freshness claim rests on that distinction. Counted after the
+    # two FAIL_UNSAFE checks, so a stale or future bar among the readable ones
+    # is still graded rather than softened into a disclosure.
+    unread = len(bars) - len(ds)
+    if unread:
+        return (INDETERMINATE, None,
+                f"{unread} of {len(bars)} entries carried no readable Date and "
+                f"were not considered"
+                + (f" ({unreadable} were not records at all)"
+                   if unreadable else "")
+                + f", so the newest session the subject served cannot be "
+                  f"identified. Of the {len(ds)} that could be read the newest "
+                  f"is {ds[-1]}, {age} calendar days old, inside the "
+                  f"{max_days} day bound; a payload that is partly unreadable "
+                  f"is not a payload shown to be fresh")
     return PASS, None, f"most recent bar {ds[-1]}, {age} calendar days old"
 
 def classify_entity(info_text, registrant):

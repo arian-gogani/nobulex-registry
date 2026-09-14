@@ -209,6 +209,47 @@ def next_record_id(out_dir, day):
     return next_in_sequence(names, day)
 
 
+def spends_record_id(filename, record_id):
+    """Whether a file already on disk has spent record_id.
+
+    This rule was inline in main(), which meant the selftest could not call
+    it and wrote its own copy of the matching instead. Four cases passed
+    against the copy while the guard they were written for was free to
+    drift, and a test that cannot fail when the code it names breaks is not
+    a test, it is a second opinion from the same author. It is a module
+    level function now so that main() and the selftest exercise one rule.
+
+    A file spends an id by being that id, or by being that id followed by a
+    dot and anything else: the record itself, its withdrawal, the reply
+    notice filed beside it. The dot is what does the work. This was
+    startswith(record_id) with no separator, so NBLX-<day>-100 was reported
+    spent by NBLX-<day>-1000 because one id is a prefix of the other. Safe
+    in direction, it stopped a run rather than destroying a record, but it
+    stopped the wrong run and said something untrue about which id was
+    spent.
+
+    An explicit list of known suffixes used to sit beside the dot clause.
+    Every entry in it began with a dot, so the dot clause already matched
+    every one of them and the list decided nothing; it read as though the
+    set of suffixes were the rule, which would have been a weaker rule than
+    the one actually running.
+    """
+    return filename == record_id or filename.startswith(record_id + ".")
+
+
+def spent_paths(out_dir, record_id):
+    """Every file under out_dir that has already spent record_id.
+
+    Walks rather than lists, because held and withdrawn records live in a
+    subdirectory and a spent number is spent wherever it sits.
+    """
+    out = []
+    for _root, _dirs, files in os.walk(os.path.abspath(out_dir)):
+        out.extend(os.path.join(_root, f) for f in files
+                   if spends_record_id(f, record_id))
+    return out
+
+
 def live_pull_note(text, is_error, bars, parse_note, raised=None):
     """Why the shared live response cannot be read, or None if it can.
 
@@ -391,18 +432,11 @@ def main():
     # file holding its number, which is deliberate: a visible stub that costs
     # one id is a better failure than a silently destroyed verdict, and it is
     # a true statement that a run began under that identity.
-    # startswith made NBLX-<day>-100 collide with NBLX-<day>-1000, because one
-    # id is a prefix of the other. The refusal is safe in direction, it stops a
-    # run rather than destroying a record, but it stops the wrong run and says
-    # something untrue about which id is spent. A suffix is what separates the
-    # id from what follows it: .json, .withdrawn.json, or the reply notice.
-    _suffixes = (".json", ".md", ".txt", ".withdrawn.json")
-    spent = []
-    for _root, _dirs, _files in os.walk(os.path.abspath(args.out)):
-        spent.extend(os.path.join(_root, f) for f in _files
-                     if f == record_id
-                     or any(f == record_id + s for s in _suffixes)
-                     or f.startswith(record_id + "."))
+    # The matching rule itself is spends_record_id(), up beside the sequencer,
+    # so that the selftest exercises the rule this guard runs rather than a
+    # copy of it. What it refuses and why it refuses that way is documented
+    # there.
+    spent = spent_paths(args.out, record_id)
     if spent:
         print(f"refusing to run: {record_id} is already spent at "
               f"{spent[0]}.\n"
