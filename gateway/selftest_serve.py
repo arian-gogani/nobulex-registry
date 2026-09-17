@@ -12,6 +12,7 @@ input is checked to produce a non-permit.
 import json
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -75,6 +76,8 @@ def main():
     check("and says it is not enforcing", h["enforcing"], False)
     check("and reports signing off when no key was given",
           h["signing"], "disabled")
+    check("and discloses the live-check cache TTL",
+          isinstance(h.get("live_check_cache_ttl_s"), (int, float)), True)
 
     print("\nDeciding\n")
     code, r = post("/v1/decisions",
@@ -223,6 +226,7 @@ def main():
     stub_auth = [{"date": d, "close": round(330.0 + i * 0.4, 2)}
                  for i, d in enumerate(stub_dates)]
 
+    real_ttl = serve.AUTH_CACHE_TTL_S
     try:
         serve.authority_bars = lambda ticker: stub_auth
         serve.datetime = type("_D", (datetime,), {
@@ -277,17 +281,78 @@ def main():
               mr["decision"], PERMIT)
         mp.shutdown()
 
+        print("\nThe authority fetch is cached, so a burst does not "
+              "re-hit the network\n")
+        calls = {"n": 0}
+
+        def counting(ticker):
+            calls["n"] += 1
+            return stub_auth
+        serve.authority_bars = counting
+
+        cache_server = build_server(minimal_policy, port=0, mode=MODE_OBSERVE)
+        cb = f"http://127.0.0.1:{cache_server.server_address[1]}"
+        threading.Thread(target=cache_server.serve_forever, daemon=True).start()
+
+        def live_check(base, ticker="AAPL"):
+            req = urllib.request.Request(
+                f"{base}/v1/live-check",
+                data=json.dumps({"ticker": ticker}).encode(),
+                headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return json.loads(resp.read())
+
+        live_check(cb)
+        live_check(cb)
+        live_check(cb)
+        check("three quick requests for the same ticker fetch once",
+              calls["n"], 1)
+
+        live_check(cb, ticker="MSFT")
+        check("a different ticker is its own fetch", calls["n"], 2)
+
+        # A fresh ticker, and a TTL with real margin either side of the
+        # sleep, so this is not a race against how long the HTTP round
+        # trips above happened to take.
+        serve.AUTH_CACHE_TTL_S = 1.0
+        calls["n"] = 0
+        live_check(cb, ticker="NFLX")
+        live_check(cb, ticker="NFLX")
+        check("immediately again, still within the TTL, no refetch",
+              calls["n"], 1)
+        time.sleep(1.2)
+        live_check(cb, ticker="NFLX")
+        check("past the TTL, the same ticker fetches again", calls["n"], 2)
+        serve.AUTH_CACHE_TTL_S = real_ttl
+        cache_server.shutdown()
+
+        # A ticker not already touched by an earlier test in this run, so
+        # this is not accidentally served from a still-warm cache entry.
+        down_ticker = "ZZZQ-UNCACHED"
+
         def unavailable(ticker):
             raise AuthorityUnavailable(f"https://example/{ticker}", status=503)
         serve.authority_bars = unavailable
-        code, r = post("/v1/live-check", {"ticker": "AAPL"})
+        code, r = post("/v1/live-check", {"ticker": down_ticker})
         check("an unreachable authority is not a gateway crash", code, 502)
         check("and is not a permit", r.get("decision") == PERMIT, False)
         check("and says why", r.get("error", {}).get("code"),
               "AUTHORITY_UNAVAILABLE")
+
+        # A failed fetch must never be cached as a real answer, or an
+        # upstream outage would look permanently down even after it
+        # recovered. Swap a working authority back in for the same ticker
+        # the failure was just reported for, and confirm it is used.
+        calls["n"] = 0
+        serve.authority_bars = counting
+        code, r = post("/v1/live-check", {"ticker": down_ticker})
+        check("a working authority right after a failure is not blocked "
+              "by a cached-down verdict", code, 200)
+        check("and it actually fetched", calls["n"], 1)
     finally:
         serve.authority_bars = real_authority_bars
         serve.datetime = datetime
+        serve.AUTH_CACHE_TTL_S = real_ttl
 
     print("\nRefusing to run a policy it cannot evaluate\n")
     from decide import PolicyError

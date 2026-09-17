@@ -26,6 +26,7 @@ import argparse
 import json
 import sys
 import threading
+import time
 import traceback
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -52,6 +53,14 @@ KNOWN_OUTCOMES = frozenset(
 MAX_BODY = 1 << 20   # 1 MiB. A decision request is small; larger is a mistake.
 MAX_DRAIN = 1 << 24  # 16 MiB. Past this, close rather than keep reading.
 
+# A live-check with no cache calls the authority once per request. A few
+# requests for the same ticker in quick succession, which is the ordinary
+# shape of a pilot poking at the demo, is enough to trip Yahoo's own rate
+# limit and turn a healthy gateway into one reporting AUTHORITY_UNAVAILABLE
+# for reasons that have nothing to do with the ticker. Observed directly
+# while testing this file, not a hypothetical.
+AUTH_CACHE_TTL_S = 30
+
 
 class Gateway:
     """Holds the policy, the receipt chain and the signer.
@@ -68,6 +77,8 @@ class Gateway:
         self._lock = threading.Lock()
         self._previous_hash = None
         self._seen = {}          # idempotency_key -> response
+        self._auth_cache_lock = threading.Lock()
+        self._auth_cache = {}    # ticker -> (fetched_monotonic, observed_at, auth)
         self.decisions = 0
         self.would_block = 0
         self.errors = 0
@@ -84,7 +95,31 @@ class Gateway:
             "would_block": self.would_block,
             "handler_errors": self.errors,
             "signing": "enabled" if self.signer else "disabled",
+            "live_check_cache_ttl_s": AUTH_CACHE_TTL_S,
         }
+
+    def _cached_authority(self, ticker):
+        """The authority series for `ticker`, reusing a recent fetch.
+
+        Only a successful fetch is cached; a failure is never remembered as
+        an answer, so the next request gets a fresh attempt rather than a
+        cached-down verdict. `observed_at` is when the network call that
+        produced this series actually happened, which is what a receipt
+        should say; the freshness classifier still gets the real current
+        time on every call, from the caller, never from this cache, because
+        staleness has to be judged against now, not against when the cache
+        was last warm.
+        """
+        now = time.monotonic()
+        with self._auth_cache_lock:
+            hit = self._auth_cache.get(ticker)
+            if hit is not None and now - hit[0] < AUTH_CACHE_TTL_S:
+                return hit[1], hit[2]
+        observed_at = datetime.now(timezone.utc)
+        auth = authority_bars(ticker)
+        with self._auth_cache_lock:
+            self._auth_cache[ticker] = (now, observed_at, auth)
+        return observed_at, auth
 
     def decide_request(self, body):
         key = body.get("idempotency_key")
@@ -141,7 +176,7 @@ class Gateway:
             raise BadRequest("ticker is required")
 
         try:
-            auth = authority_bars(ticker)
+            fetched_at, auth = self._cached_authority(ticker)
         except AuthorityUnavailable as e:
             # The authority not answering is INDETERMINATE, never a pass.
             # There is no reference to compare against, so there is no
@@ -183,8 +218,11 @@ class Gateway:
 
         action = {"type": "market.data.verify", "ticker": ticker,
                   "notional_usd": context.get("action", {}).get("notional_usd")}
+        # observed_at is when the network fetch actually happened, which on
+        # a cache hit predates this request; now_utc above is what freshness
+        # was judged against, and the two are allowed to differ.
         refs = [{"type": "market.chart", "source_id": "yahoo-finance-chart-v8",
-                 "observed_at": now_utc.isoformat(), "content_hash": sha256(auth)}]
+                 "observed_at": fetched_at.isoformat(), "content_hash": sha256(auth)}]
         with self._lock:
             r = receipt(d, action, refs, previous_hash=self._previous_hash,
                         signer=self.signer)
