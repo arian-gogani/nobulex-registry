@@ -14,6 +14,7 @@ import sys
 import threading
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -22,6 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "suite"))
 from decide import (  # noqa: E402
     BLOCK, ESCALATE, EV_INDETERMINATE, MODE_ENFORCE, MODE_OBSERVE, PERMIT,
 )
+from harness import AuthorityUnavailable  # noqa: E402
+import serve  # noqa: E402
 from serve import build_server  # noqa: E402
 
 FAILURES = []
@@ -205,6 +208,86 @@ def main():
         s.shutdown()
     except ImportError:
         print("  skip  signing tests, cryptography not installed")
+
+    print("\nLive check, stubbed at the network boundary\n")
+    # /v1/live-check reaches a live endpoint in production, so this test must
+    # not, or the suite fails on a plane. Only authority_bars is stubbed;
+    # everything below the fetch runs for real against it, same discipline
+    # as selftest_live.py.
+    real_authority_bars = serve.authority_bars
+    stub_now = datetime(2026, 9, 17, 20, 0, tzinfo=timezone.utc)
+    stub_dates = ["2026-08-31", "2026-09-01", "2026-09-02", "2026-09-03",
+                  "2026-09-04", "2026-09-08", "2026-09-09", "2026-09-10",
+                  "2026-09-11", "2026-09-14", "2026-09-15", "2026-09-16",
+                  "2026-09-17"]
+    stub_auth = [{"date": d, "close": round(330.0 + i * 0.4, 2)}
+                 for i, d in enumerate(stub_dates)]
+
+    try:
+        serve.authority_bars = lambda ticker: stub_auth
+        serve.datetime = type("_D", (datetime,), {
+            "now": staticmethod(lambda tz=None: stub_now)})
+
+        code, r = post("/v1/live-check", {"ticker": "AAPL", "context": OK_CTX})
+        check("a faithful live check decides", code, 200)
+        check("and permits", r["decision"], PERMIT)
+        check("noting the subject is the authority's own series",
+              "faithful" in r["subject_note"], True)
+        check("and carries a receipt", r["receipt"]["receipt_hash"][:7],
+              "sha256:")
+
+        corrupted = [{"Date": b["date"], "Open": b["close"], "High": b["close"],
+                     "Low": b["close"], "Close": b["close"]} for b in stub_auth]
+        corrupted[-1]["Close"] = round(corrupted[-1]["Close"] * 1.02, 4)
+        code, r = post("/v1/live-check",
+                       {"ticker": "AAPL", "subject": corrupted, "context": OK_CTX})
+        check("a caller-supplied subject is judged, not trusted", code, 200)
+        check("and a 2% deviation is not permitted", r["decision"] != PERMIT,
+              True)
+        check("caught by fidelity",
+              r["checks"]["fidelity"]["outcome"] != "PASS", True)
+        check("subject_note says caller-supplied",
+              r["subject_note"], "subject supplied by caller")
+
+        code, r = post("/v1/live-check", {})
+        check("a missing ticker is rejected", code, 400)
+        check("and is not a permit", r.get("decision") == PERMIT, False)
+
+        code, r = post("/v1/live-check", {"ticker": "AAPL", "subject": "nope"})
+        check("a non-list subject is rejected", code, 400)
+
+        minimal_policy = {
+            "id": "live-check-minimal", "version": 1,
+            "on_evidence": {"PASS": PERMIT, "FAIL": BLOCK,
+                            "INDETERMINATE": ESCALATE},
+            "on_limit_violation": BLOCK,
+            "limits": [{"field": "action.notional_usd", "op": "lte",
+                       "value": 50000, "code": "NOTIONAL_OK"}],
+        }
+        mp = build_server(minimal_policy, port=0, mode=MODE_OBSERVE)
+        mp_base = f"http://127.0.0.1:{mp.server_address[1]}"
+        threading.Thread(target=mp.serve_forever, daemon=True).start()
+        mreq = urllib.request.Request(
+            f"{mp_base}/v1/live-check",
+            data=json.dumps({"ticker": "AAPL"}).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(mreq, timeout=5) as resp:
+            mr = json.loads(resp.read())
+        check("without a context, notional_usd defaults and still permits",
+              mr["decision"], PERMIT)
+        mp.shutdown()
+
+        def unavailable(ticker):
+            raise AuthorityUnavailable(f"https://example/{ticker}", status=503)
+        serve.authority_bars = unavailable
+        code, r = post("/v1/live-check", {"ticker": "AAPL"})
+        check("an unreachable authority is not a gateway crash", code, 502)
+        check("and is not a permit", r.get("decision") == PERMIT, False)
+        check("and says why", r.get("error", {}).get("code"),
+              "AUTHORITY_UNAVAILABLE")
+    finally:
+        serve.authority_bars = real_authority_bars
+        serve.datetime = datetime
 
     print("\nRefusing to run a policy it cannot evaluate\n")
     from decide import PolicyError

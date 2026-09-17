@@ -5,6 +5,7 @@
     python3 gateway/serve.py --policy p.json --enforce      # opt in explicitly
 
     POST /v1/decisions          decide one proposed action
+    POST /v1/live-check         fetch a live authority and decide against it
     POST /v1/receipts/verify    verify a receipt against a public key
     GET  /healthz               liveness, and the mode it is actually in
 
@@ -26,6 +27,7 @@ import json
 import sys
 import threading
 import traceback
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -38,8 +40,11 @@ from decide import (  # noqa: E402
     verify_receipt,
 )
 from harness import (  # noqa: E402
-    FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, OUT_OF_SCOPE, PASS,
+    AuthorityUnavailable, FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE,
+    OUT_OF_SCOPE, PASS,
 )
+from live_adapter import authority_bars, subject_from_authority  # noqa: E402
+from live_adapter import run as live_run  # noqa: E402
 
 KNOWN_OUTCOMES = frozenset(
     (PASS, FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, OUT_OF_SCOPE))
@@ -130,12 +135,84 @@ class Gateway:
                 self._seen[key] = response
         return response
 
+    def live_check_request(self, body):
+        ticker = body.get("ticker")
+        if not isinstance(ticker, str) or not ticker.strip():
+            raise BadRequest("ticker is required")
+
+        try:
+            auth = authority_bars(ticker)
+        except AuthorityUnavailable as e:
+            # The authority not answering is INDETERMINATE, never a pass.
+            # There is no reference to compare against, so there is no
+            # verdict to give, not even by default.
+            raise AuthorityDown(
+                f"authority did not answer for {ticker}: {e}") from None
+        if len(auth) < 2:
+            raise AuthorityDown(
+                f"authority returned {len(auth)} usable bars for {ticker}, "
+                "not enough to compare")
+
+        subject = body.get("subject")
+        if subject is None:
+            subject = subject_from_authority(auth)
+            note = "subject is the authority's own series, faithful transport"
+        elif not isinstance(subject, list):
+            raise BadRequest("subject must be a list of bars")
+        else:
+            note = "subject supplied by caller"
+
+        # The running policy's limits are not necessarily about notional
+        # alone (it may also gate on quote freshness or turnover), so a
+        # caller may supply the full context those limits need, same shape
+        # as /v1/decisions. Absent that, a bare notional_usd is a
+        # convenience for the common case.
+        context = body.get("context")
+        if context is not None:
+            if not isinstance(context, dict):
+                raise BadRequest("context must be an object")
+        else:
+            notional = body.get("notional_usd", 10000)
+            if not isinstance(notional, (int, float)):
+                raise BadRequest("notional_usd must be a number")
+            context = {"action": {"notional_usd": notional}}
+
+        now_utc = datetime.now(timezone.utc)
+        checks, d = live_run(subject, auth, now_utc, policy=self.policy,
+                             context=context, mode=self.mode)
+
+        action = {"type": "market.data.verify", "ticker": ticker,
+                  "notional_usd": context.get("action", {}).get("notional_usd")}
+        refs = [{"type": "market.chart", "source_id": "yahoo-finance-chart-v8",
+                 "observed_at": now_utc.isoformat(), "content_hash": sha256(auth)}]
+        with self._lock:
+            r = receipt(d, action, refs, previous_hash=self._previous_hash,
+                        signer=self.signer)
+            self._previous_hash = r["receipt_hash"]
+            self.decisions += 1
+            if d["would_block"]:
+                self.would_block += 1
+        return {
+            **d,
+            "receipt": r,
+            "ticker": ticker,
+            "authority": {"source": "yahoo-finance-chart-v8",
+                          "sessions": len(auth), "latest": auth[-1]},
+            "subject_note": note,
+            "checks": {name: {"outcome": outcome, "evidence": str(ev)[:200]}
+                      for name, (outcome, _, ev) in checks.items()},
+        }
+
 
 class BadRequest(ValueError):
     pass
 
 
 class TooLarge(ValueError):
+    pass
+
+
+class AuthorityDown(ValueError):
     pass
 
 
@@ -219,6 +296,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/v1/decisions":
                 self._send(200, gw.decide_request(self._read_json()))
                 return
+            if path == "/v1/live-check":
+                self._send(200, gw.live_check_request(self._read_json()))
+                return
             if path == "/v1/receipts/verify":
                 body = self._read_json()
                 import base64
@@ -230,6 +310,11 @@ class Handler(BaseHTTPRequestHandler):
         except TooLarge as e:
             gw.errors += 1
             self._send(413, _fail_closed("BODY_TOO_LARGE", str(e), gw.mode))
+        except AuthorityDown as e:
+            # The upstream not answering is not the gateway's fault and not
+            # the caller's either, but it is still never a permit.
+            gw.errors += 1
+            self._send(502, _fail_closed("AUTHORITY_UNAVAILABLE", str(e), gw.mode))
         except BadRequest as e:
             # A malformed request is not an approval.
             gw.errors += 1

@@ -1,0 +1,18 @@
+{
+  "id": "live-check-v1",
+  "version": 1,
+  "on_evidence": {
+    "PASS": "PERMIT",
+    "FAIL": "BLOCK",
+    "INDETERMINATE": "ESCALATE"
+  },
+  "on_limit_violation": "BLOCK",
+  "limits": [
+    {
+      "field": "action.notional_usd",
+      "op": "lte",
+      "value": 50000,
+      "code": "NOTIONAL_WITHIN_LIMIT"
+    }
+  ]
+}

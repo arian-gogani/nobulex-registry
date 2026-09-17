@@ -107,7 +107,12 @@ def inject(subject, kind):
                      "choose truncate, stale, corrupt or future")
 
 
-def run(subject, authority, now_utc):
+def run(subject, authority, now_utc, policy=POLICY, context=CONTEXT,
+        mode=MODE_OBSERVE):
+    """policy, context and mode default to this module's own, so the CLI is
+    unaffected; the HTTP surface passes its own running policy and mode
+    instead so a live check is judged the same way the gateway was
+    actually started, not by a policy or mode baked into this file."""
     tol = CONFIG["price_tolerance_rel"]
     checks = {
         "truncation": classify_truncation(subject, authority),
@@ -119,7 +124,7 @@ def run(subject, authority, now_utc):
             CONFIG["freshness_max_future_days"]),
     }
     outcomes = [o for o, _, _ in checks.values()]
-    d = decide(POLICY, outcomes, CONTEXT, mode=MODE_OBSERVE)
+    d = decide(policy, outcomes, context, mode=mode)
     return checks, d
 
 
