@@ -56,6 +56,22 @@ the fidelity probe would not permit it, because a comparison is only as
 readable as its weaker half. That is recorded in the corpus as the
 degraded-evidence case that must ESCALATE, with the reasoning inline.
 
+The first thing here that touches a live source:
+
+```bash
+python3 gateway/live_adapter.py AAPL
+python3 gateway/live_adapter.py AAPL --inject corrupt
+```
+
+It fetches a real daily series, runs the real classifiers and the real
+decision layer, and PERMITs when the transport is faithful. `--inject`
+corrupts the live series one plausible way, and the same pipeline blocks
+it, naming the classifier and, for a value corruption, the exact session
+and deviation. It does not verify a third-party tool: the subject is the
+authority's own series unless you point it elsewhere, and where the only
+reference is the subject's own upstream a value verdict is OUT_OF_SCOPE,
+not PASS. Its tests stub the network, so the suite still runs offline.
+
 The integration story for a shadow pilot is one wrapper:
 
 ```python
