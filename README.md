@@ -1,14 +1,14 @@
 # Nobulex
 
-**The independent reliability registry for agent tools.**
+**Decision integrity for autonomous finance.**
 
-Payment rails prove money moved. Nobulex proves what happened on the other side.
+A well-formed lie passes every schema check. This verifies the financial facts behind a proposed action, evaluates a deterministic policy, and decides whether the action may execute.
 
-Starting with financial data, where correctness is checkable against an authority.
+Financial data first, because it is the one place the right answer is checkable against an outside authority.
 
 The argument underneath this, including what would make it wrong, is in [THESIS.md](THESIS.md).
 
-[Public register](https://nobulex.com/register) · [Methodology](https://nobulex.com/methodology) · [What would make this wrong](THESIS.md)
+[The method](https://nobulex.com/methodology) · [What would make this wrong](THESIS.md)
 
 Run the part that decides whether a verdict means anything:
 
@@ -31,6 +31,28 @@ This offline example feeds fictional data into the suite's actual truncation cla
 The script checks all three expected outcomes and exits nonzero if any changes. It needs only Python 3.11 or newer. No credentials or downloads are needed after cloning. This demonstrates one classifier, not a live tool test or a registry attestation. Even its `PASS` does not establish that the prices are correct.
 
 Found an input that produces the wrong verdict? [Open an issue](https://github.com/arian-gogani/nobulex-registry/issues/new/choose) with fictional or shareable input, the command you ran, the actual output, and the result you expected. Please leave credentials and private data out.
+
+### See the decision layer
+
+```bash
+python3 examples/decision_demo.py
+python3 gateway/selftest_gateway.py
+```
+
+The checks answer "were these facts correct". `gateway/decide.py` answers the question a caller has to act on: may this specific action execute now. It keeps two surfaces apart on purpose.
+
+    evidence_status   PASS | FAIL | INDETERMINATE
+    decision          PERMIT | BLOCK | ESCALATE
+
+Collapsing them loses the difference between "the facts are wrong" and "your rule is strict", which need different responses.
+
+Three properties the tests exist to pin down, because each one is a way for a gateway to report success without deciding anything:
+
+- **Zero checks is not a pass.** An evidence status aggregated over an empty set is `INDETERMINATE`. `all([])` being `True` is the defect, not the design.
+- **A limit that cannot be evaluated is not satisfied.** A missing field or an incomparable value blocks and is counted in `unevaluated_limits`, never skipped.
+- **An explicit refusal is not a failure of fact.** A source that declines gives `INDETERMINATE`, not `FAIL`. Reading it as `FAIL` blocks on every hiccup and trains operators to bypass the gateway; reading it as `PASS` is the defect this repository is about.
+
+Observe mode computes the whole decision and reports `would_block` without ever claiming it stopped anything. Receipts hold hashes, not payloads, and an unsigned receipt says `UNSIGNED` rather than looking signed.
 
 Want to contribute a test, fix, or method correction? Start with [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -205,6 +227,8 @@ Written plainly, because a registry whose README overclaims has already failed i
 
 **Built:** a verification harness that speaks raw JSON-RPC to a subject over stdio and never imports the subject's own code, with probes for nonexistent entities, malformed input, closed-market dates, OHLC invariants, monotonic dates, silent truncation, cross-endpoint agreement, and freshness against an independent authority. A self-test that runs those probes against fixtures known to be bad, because a probe that cannot fail is worse than no probe at all. A record generator that writes the subject tuple from the environment the run actually happened in rather than from what the subject reports about itself, since a subject that self-reports its version can be wrong about it, and one of them was. A register page compiled from the records on every build, with a check mode that fails when the page and the records disagree. A publication gate that keeps a held record off the public page by construction, and refuses to write the page at all if a held record's identifier or its subject's name reaches it by any path. Held records themselves live outside version control, and what is committed in their place is a manifest that fixes each one by sha256 without disclosing a word of what it says, so a record can be unalterable and unreadable at the same time.
 
+**Built, the decision layer:** `gateway/decide.py`, a bounded policy evaluator with a fixed operator set, no loops and no lookups outside the supplied context, so evaluation over an authenticated context is deterministic and terminating by construction. Ed25519 receipt signing and independent verification, hash-chained. A self-test whose cases were each checked by re-introducing the defect they guard against and confirming they go red.
+
 **Run:** the suite has been run live against a pinned commit of a third party MCP server, twice, under two separately resolved dependency sets for the same source code. Each run produced a record. Both records are held under right of reply, and what they found is not stated here, for the same reason it is not stated on the register: a finding its subject has not yet seen is not one they can answer.
 
 **Not yet true:**
@@ -213,6 +237,7 @@ Written plainly, because a registry whose README overclaims has already failed i
 - **No verdict here is checkable by a stranger yet.** The method is, as of this repository: the harness, the probes, the self-test, the record generator, the renderer and the publication gate are all here to be read, run, and attacked. The records are not, because every one of them is held. Until the first one publishes, anything this project says about what it found is a claim about runs that exactly one machine has seen, and an uncheckable verdict is an opinion with a logo on it.
 - **There is no persistent issuing identity.** Records are not signed by a key with durable, publicly anchored provenance, and until they are, a signature proves only that the same ephemeral key signed twice.
 - **No buyer has paid for a verification.** Nobody has stated what they would pay, or at what point in their process they would want it.
+- **The gateway is not inline anywhere.** `gateway/decide.py` decides correctly on inputs handed to it, and that is all that has been demonstrated. Nothing routes production traffic through it, no HTTP surface is deployed, and nobody is blocking live orders with it. Observe mode is a mode in the code, not a running deployment.
 
 The first record this registry ever issued was withdrawn, because its subject tuple named a version that could not be resolved to anything real. The withdrawal was not deleted and will not be, because a registry that erases its mistakes is asking to be trusted instead of checked. It is not on the register today either, and the reason is worth stating: it is about the same package as the two records under reply, and it is the only subject the page would name at all, so publishing it tells a reader that findings are being withheld about one identified project while showing none of the evidence. That is the accusation the reply window exists to prevent, delivered without the detail its subject would need to answer it. It publishes on the day its successors do.
 
