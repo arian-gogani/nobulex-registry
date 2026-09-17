@@ -32,6 +32,7 @@ POLICY = {
     "id": "wrap-test", "version": 1,
     "on_evidence": {EV_PASS: PERMIT, EV_FAIL: BLOCK,
                     EV_INDETERMINATE: ESCALATE},
+    "on_limit_violation": BLOCK,
     "limits": [],
 }
 

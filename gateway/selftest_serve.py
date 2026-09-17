@@ -145,6 +145,42 @@ def main():
     check("and a new key is a different receipt",
           c["receipt"]["receipt_hash"] != a["receipt"]["receipt_hash"], True)
 
+    print("\nThe same idempotency key racing itself still executes once\n")
+    # Two requests never get this close in a real network round trip, so
+    # this forces it: both threads are made to enter decide() together via
+    # a barrier, which is the exact interleaving that used to let both
+    # past the "not seen yet" check before either had written.
+    race_gw = serve.Gateway(POLICY, mode=MODE_OBSERVE)
+    real_decide = serve.decide
+    entered = []
+    barrier = threading.Barrier(2)
+
+    def racing_decide(*a, **kw):
+        entered.append(1)
+        try:
+            barrier.wait(timeout=1)
+        except threading.BrokenBarrierError:
+            pass
+        return real_decide(*a, **kw)
+
+    serve.decide = racing_decide
+    race_body = {"action": ACTION, "outcomes": ["PASS"], "context": OK_CTX,
+                "idempotency_key": "race-key"}
+    race_results = []
+    threads = [threading.Thread(target=lambda: race_results.append(
+        race_gw.decide_request(race_body))) for _ in range(2)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    serve.decide = real_decide
+
+    race_hashes = {r["receipt"]["receipt_hash"] for r in race_results}
+    check("a racing pair of requests for the same key mints one receipt",
+          len(race_hashes), 1)
+    check("and the gateway counted one decision, not two",
+          race_gw.decisions, 1)
+
     print("\nEnforce mode is opt-in\n")
     # Build with no mode argument at all. Every other test in this file names
     # the mode explicitly, so a change to the default would have gone

@@ -125,7 +125,9 @@ def fault_cases():
                         "Low": 238.0, "Close": 242.60}], "ohlc"),
 
         ("string_prices",
-         "prices as strings, where '10' <= '9' compares true",
+         "prices as strings; classify_ohlc gates on numeric type before "
+         "comparing, so this is unreadable rather than a string comparison "
+         "quietly returning a wrong-but-plausible answer",
          [{"Date": d, "Open": str(c - 0.2), "High": str(c + 0.6),
            "Low": str(c - 0.6), "Close": str(c)}
           for d, c in zip(SESSIONS, CLOSES)], "ohlc"),

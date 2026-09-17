@@ -122,43 +122,52 @@ class Gateway:
         return observed_at, auth
 
     def decide_request(self, body):
+        # The idempotency check and the write that satisfies it used to be
+        # two separate lock acquisitions, with decide()/receipt() running
+        # unlocked in between. Two requests carrying the same key could
+        # both pass the "not seen yet" check before either had written,
+        # and both would execute: confirmed by forcing that interleaving
+        # directly. The whole method is one critical section now. It is
+        # not a throughput cost beyond what already existed: every request
+        # already serialized on this same lock to mint its receipt, because
+        # the hash chain is sequential by construction.
         key = body.get("idempotency_key")
-        if key is not None:
-            with self._lock:
-                if key in self._seen:
-                    return self._seen[key]
-
-        action = body.get("action")
-        if not isinstance(action, dict) or not action.get("type"):
-            raise BadRequest("action.type is required")
-
-        outcomes = body.get("outcomes") or []
-        if not isinstance(outcomes, list):
-            raise BadRequest("outcomes must be a list of suite verdicts")
-        # An unrecognised verdict is safe by accident: aggregate() falls back
-        # to OUT_OF_SCOPE, which resolves to INDETERMINATE and escalates. But
-        # a caller who typed the verdict wrong would see every decision
-        # escalate and nothing telling them why. Reject it instead, so the
-        # integration bug is loud rather than a quiet permanent escalation.
-        unknown = [o for o in outcomes if o not in KNOWN_OUTCOMES]
-        if unknown:
-            raise BadRequest(
-                f"unknown outcome(s) {unknown!r}; expected any of "
-                f"{sorted(KNOWN_OUTCOMES)}")
-
-        context = body.get("context")
-        if not isinstance(context, dict):
-            raise BadRequest("context must be an object")
-
-        try:
-            d = decide(self.policy, outcomes, context, mode=self.mode)
-        except KeyError as e:
-            # An outcome string the suite does not define. Refusing is the
-            # only safe answer: an unknown verdict must never map to PERMIT.
-            raise BadRequest(f"unknown outcome {e.args[0]!r}") from None
-
-        refs = body.get("evidence_refs") or []
         with self._lock:
+            if key is not None and key in self._seen:
+                return self._seen[key]
+
+            action = body.get("action")
+            if not isinstance(action, dict) or not action.get("type"):
+                raise BadRequest("action.type is required")
+
+            outcomes = body.get("outcomes") or []
+            if not isinstance(outcomes, list):
+                raise BadRequest("outcomes must be a list of suite verdicts")
+            # An unrecognised verdict is safe by accident: aggregate() falls
+            # back to OUT_OF_SCOPE, which resolves to INDETERMINATE and
+            # escalates. But a caller who typed the verdict wrong would see
+            # every decision escalate and nothing telling them why. Reject
+            # it instead, so the integration bug is loud rather than a
+            # quiet permanent escalation.
+            unknown = [o for o in outcomes if o not in KNOWN_OUTCOMES]
+            if unknown:
+                raise BadRequest(
+                    f"unknown outcome(s) {unknown!r}; expected any of "
+                    f"{sorted(KNOWN_OUTCOMES)}")
+
+            context = body.get("context")
+            if not isinstance(context, dict):
+                raise BadRequest("context must be an object")
+
+            try:
+                d = decide(self.policy, outcomes, context, mode=self.mode)
+            except KeyError as e:
+                # An outcome string the suite does not define. Refusing is
+                # the only safe answer: an unknown verdict must never map
+                # to PERMIT.
+                raise BadRequest(f"unknown outcome {e.args[0]!r}") from None
+
+            refs = body.get("evidence_refs") or []
             r = receipt(d, action, refs, previous_hash=self._previous_hash,
                         signer=self.signer)
             self._previous_hash = r["receipt_hash"]

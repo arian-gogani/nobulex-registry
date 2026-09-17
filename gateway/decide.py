@@ -114,7 +114,7 @@ def validate_policy(policy) -> None:
     """Reject anything this evaluator cannot evaluate totally."""
     if not isinstance(policy, dict):
         raise PolicyError("policy must be an object")
-    for field in ("id", "version", "on_evidence"):
+    for field in ("id", "version", "on_evidence", "on_limit_violation"):
         if field not in policy:
             raise PolicyError(f"policy is missing required field {field!r}")
 
@@ -126,6 +126,18 @@ def validate_policy(policy) -> None:
                 "unstated is how a permissive default gets in by accident")
         if on_ev[status] not in (PERMIT, BLOCK, ESCALATE):
             raise PolicyError(f"on_evidence[{status}] is not a decision")
+
+    # PERMIT is a valid decision in general, but not here: a limit exists
+    # to refuse an action that failed a numeric check, and permitting on
+    # its own violation is not a policy choice, it is the limit doing
+    # nothing while still being present in the file to be read as a
+    # safeguard. This was reachable before this check existed: a policy
+    # with on_limit_violation set to PERMIT validated cleanly and a
+    # $999,999,999 order against a $1,000 cap decided PERMIT.
+    if policy["on_limit_violation"] not in (BLOCK, ESCALATE):
+        raise PolicyError(
+            "on_limit_violation must be BLOCK or ESCALATE, not "
+            f"{policy['on_limit_violation']!r}")
 
     for i, rule in enumerate(policy.get("limits", [])):
         if set(rule) - {"field", "op", "value", "code"}:
@@ -204,7 +216,12 @@ def decide(policy, outcomes, context, mode=MODE_OBSERVE):
     elif limits_ok:
         decision = PERMIT
     else:
-        decision = policy.get("on_limit_violation", BLOCK)
+        # validate_policy() above guarantees this key exists and is BLOCK
+        # or ESCALATE. Indexing rather than .get(..., BLOCK) is deliberate:
+        # a default here is exactly the permissive-default shape this file
+        # exists to refuse, so if the invariant is ever broken this raises
+        # instead of quietly supplying one.
+        decision = policy["on_limit_violation"]
 
     unevaluated = [r for r in reasons if r["status"] == "UNEVALUATED"]
 

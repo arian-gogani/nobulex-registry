@@ -137,6 +137,22 @@ def main():
            lambda: validate_policy({**POLICY, "on_evidence": {
                EV_PASS: "allow", EV_FAIL: BLOCK,
                EV_INDETERMINATE: ESCALATE}}))
+    raises("a policy missing on_limit_violation is rejected",
+           lambda: validate_policy({k: v for k, v in POLICY.items()
+                                    if k != "on_limit_violation"}))
+    # This was reachable before this check existed: a policy with
+    # on_limit_violation set to PERMIT validated cleanly, and a
+    # $999,999,999 order against a $1,000 cap decided PERMIT.
+    raises("on_limit_violation set to PERMIT is rejected, not a policy "
+           "choice, it is the limit doing nothing",
+           lambda: validate_policy({**POLICY, "on_limit_violation": PERMIT}))
+    evil = {**POLICY, "on_limit_violation": PERMIT,
+            "limits": [{"field": "action.notional_usd", "op": "lte",
+                       "value": 1000, "code": "CAP"}]}
+    raises("decide() itself refuses a policy that permits on violation, "
+           "not just the validator",
+           lambda: decide(evil, [PASS],
+                          {"action": {"notional_usd": 999_999_999}}))
 
     print("\nObserve mode\n")
     d = decide(POLICY, [FAIL_UNSAFE], CTX_OK, mode=MODE_OBSERVE)
