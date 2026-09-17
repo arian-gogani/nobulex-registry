@@ -40,6 +40,22 @@ python3 gateway/selftest_gateway.py
 python3 gateway/selftest_serve.py
 ```
 
+The fault challenge is the fixed suite a pilot replays, pinned by hash and
+self-checking: eleven well-formed-but-wrong conditions through the real
+classifiers into the real decision layer, with catch rate, false-block rate
+and policy-evaluation latency printed as measurements. It exits nonzero the
+day any fault stops being caught or any clean case stops being permitted.
+
+```bash
+python3 gateway/fault_challenge.py
+```
+
+One case in it exists because the suite refused my first version of this
+file: an authority carrying a null close was written as a clean case, and
+the fidelity probe would not permit it, because a comparison is only as
+readable as its weaker half. That is recorded in the corpus as the
+degraded-evidence case that must ESCALATE, with the reasoning inline.
+
 There is an HTTP surface too, standard library only, no install:
 
 ```bash
