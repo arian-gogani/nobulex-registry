@@ -56,6 +56,22 @@ the fidelity probe would not permit it, because a comparison is only as
 readable as its weaker half. That is recorded in the corpus as the
 degraded-evidence case that must ESCALATE, with the reasoning inline.
 
+The integration story for a shadow pilot is one wrapper:
+
+```python
+from observe import guard
+fetch_bars = guard(fetch_bars, checks=my_checks, policy=my_policy,
+                   on_decision=log_or_webhook)
+```
+
+In observe mode, the default, the wrapped call is the call it was before:
+same result, same exceptions, even when a fault fires, even when the
+gateway's own code raises. A shadow that can break production is not a
+shadow, and that property is pinned by `gateway/selftest_observe.py`,
+including the case where the decision consumer itself is broken. In
+enforce mode the gateway's own failure is the caller's stated choice,
+block by default, never a silent approval.
+
 There is an HTTP surface too, standard library only, no install:
 
 ```bash
