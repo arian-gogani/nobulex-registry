@@ -37,6 +37,14 @@ Found an input that produces the wrong verdict? [Open an issue](https://github.c
 ```bash
 python3 examples/decision_demo.py
 python3 gateway/selftest_gateway.py
+python3 gateway/selftest_serve.py
+```
+
+There is an HTTP surface too, standard library only, no install:
+
+```bash
+python3 gateway/serve.py --policy gateway/policy.example.json
+curl -s localhost:8830/healthz
 ```
 
 The checks answer "were these facts correct". `gateway/decide.py` answers the question a caller has to act on: may this specific action execute now. It keeps two surfaces apart on purpose.
@@ -226,6 +234,8 @@ Written plainly, because a registry whose README overclaims has already failed i
 **Designed and specified:** the verdict system, the subject tuple, the attestation types, the loss cause taxonomy v0, the warranty scope, the expiry model, the publication gate, and the public register surface.
 
 **Built:** a verification harness that speaks raw JSON-RPC to a subject over stdio and never imports the subject's own code, with probes for nonexistent entities, malformed input, closed-market dates, OHLC invariants, monotonic dates, silent truncation, cross-endpoint agreement, and freshness against an independent authority. A self-test that runs those probes against fixtures known to be bad, because a probe that cannot fail is worse than no probe at all. A record generator that writes the subject tuple from the environment the run actually happened in rather than from what the subject reports about itself, since a subject that self-reports its version can be wrong about it, and one of them was. A register page compiled from the records on every build, with a check mode that fails when the page and the records disagree. A publication gate that keeps a held record off the public page by construction, and refuses to write the page at all if a held record's identifier or its subject's name reaches it by any path. Held records themselves live outside version control, and what is committed in their place is a manifest that fixes each one by sha256 without disclosing a word of what it says, so a record can be unalterable and unreadable at the same time.
+
+**Built, the HTTP surface:** `gateway/serve.py`, standard library only. `POST /v1/decisions`, `POST /v1/receipts/verify`, `GET /healthz`. Observe is the default and `--enforce` is required to block; the server refuses to start on a policy it cannot evaluate rather than running with a permissive gap. Every error path, including an unhandled exception in its own handler, returns an explicit non-permit rather than anything a caller could read as approval. That property is the one most heavily covered by its tests: mutating the failure shape to a permit fails 25 of them.
 
 **Built, the decision layer:** `gateway/decide.py`, a bounded policy evaluator with a fixed operator set, no loops and no lookups outside the supplied context, so evaluation over an authenticated context is deterministic and terminating by construction. Ed25519 receipt signing and independent verification, hash-chained. A self-test whose cases were each checked by re-introducing the defect they guard against and confirming they go red.
 

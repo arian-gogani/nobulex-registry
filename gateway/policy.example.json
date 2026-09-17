@@ -1,0 +1,36 @@
+{
+  "id": "equity-order-v1",
+  "version": 1,
+  "on_evidence": {
+    "PASS": "PERMIT",
+    "FAIL": "BLOCK",
+    "INDETERMINATE": "ESCALATE"
+  },
+  "on_limit_violation": "BLOCK",
+  "limits": [
+    {
+      "field": "action.notional_usd",
+      "op": "lte",
+      "value": 50000,
+      "code": "POLICY_NOTIONAL_WITHIN_LIMIT"
+    },
+    {
+      "field": "evidence.quote.age_ms",
+      "op": "lte",
+      "value": 1000,
+      "code": "QUOTE_FRESH"
+    },
+    {
+      "field": "evidence.quote.deviation_bps",
+      "op": "lte",
+      "value": 10,
+      "code": "REFERENCE_CONSENSUS"
+    },
+    {
+      "field": "portfolio.daily_turnover_pct",
+      "op": "lte",
+      "value": 5,
+      "code": "TURNOVER_WITHIN_LIMIT"
+    }
+  ]
+}
