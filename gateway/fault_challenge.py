@@ -149,6 +149,13 @@ def fault_cases():
          "the bare token NaN, which json.loads accepts off the wire",
          [{"Date": d, "Open": c, "High": c, "Low": c, "Close": nan}
           for d, c in zip(SESSIONS, CLOSES)], "fidelity"),
+
+        ("fabricated_session",
+         "every real session plus one dated the Saturday between two of "
+         "them, priced 300% off; ohlc and monotonic pass it clean, and "
+         "truncation's old deficit-only check never looked at a surplus",
+         bars(SESSIONS[:2] + ["2026-09-12"] + SESSIONS[2:],
+              CLOSES[:2] + [999.99] + CLOSES[2:]), "truncation"),
     ]
 
 

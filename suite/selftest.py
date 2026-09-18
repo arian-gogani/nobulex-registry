@@ -821,6 +821,50 @@ check("truncation / an undatable authority payload is not a baseline",
 check("truncation / a readable pair is still judged, not abstained on",
       classify_truncation(_span("2026-09-01", 4), _A4), PASS, None, "quiet")
 
+# ============================================== 6d. surplus_session
+# The deficit check above only ever looked for s < a. A subject serving every
+# session the authority holds, plus one the authority does not, was never
+# examined by anything here: shared == smaller, so the overlap floor is
+# trivially satisfied, and the function fell through to plain PASS reading
+# "subject 6 sessions, authority 5". Found directly with a fabricated Saturday
+# bar priced roughly 300% off the real sessions beside it; every other probe
+# passed it too, and the decision layer reached PERMIT.
+_REAL_AUTH = auth_bars([
+    ("2026-09-10", 241.10), ("2026-09-11", 242.05), ("2026-09-14", 240.80),
+    ("2026-09-15", 243.00), ("2026-09-16", 242.60)])
+_FABRICATED = [
+    {"Date": "2026-09-10", "Close": 241.10},
+    {"Date": "2026-09-11", "Close": 242.05},
+    {"Date": "2026-09-12", "Close": 999.99},  # a Saturday, not a trading day
+    {"Date": "2026-09-14", "Close": 240.80},
+    {"Date": "2026-09-15", "Close": 243.00},
+    {"Date": "2026-09-16", "Close": 242.60},
+]
+check("truncation / a fabricated session inside the authority's window is "
+      "not a pass",
+      classify_truncation(_FABRICATED, _REAL_AUTH),
+      FAIL_UNSAFE, "surplus_session", "detect")
+
+check("truncation / every real session with none fabricated still passes",
+      classify_truncation(_FABRICATED[:2] + _FABRICATED[3:], _REAL_AUTH),
+      PASS, None, "quiet")
+
+# A subject date beyond the authority's own window is a coverage question,
+# not a fabrication, and must not be flagged the same way: the authority
+# simply may not extend as far as the subject does yet.
+_SUBJECT_PLUS_NEWER = [
+    {"Date": "2026-09-10", "Close": 241.10},
+    {"Date": "2026-09-11", "Close": 242.05},
+    {"Date": "2026-09-14", "Close": 240.80},
+    {"Date": "2026-09-15", "Close": 243.00},
+    {"Date": "2026-09-16", "Close": 242.60},
+    {"Date": "2026-09-17", "Close": 244.00},
+]
+check("truncation / a session after the authority's latest is not flagged "
+      "as fabricated",
+      classify_truncation(_SUBJECT_PLUS_NEWER, _REAL_AUTH),
+      PASS, None, "quiet")
+
 # ==================================================== 7. stale_value freshness
 stale = [bar("2026-06-01", 1, 2, 0.5, 1.5)]
 check("freshness / two-month-old final bar served as current",

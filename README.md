@@ -56,6 +56,19 @@ the fidelity probe would not permit it, because a comparison is only as
 readable as its weaker half. That is recorded in the corpus as the
 degraded-evidence case that must ESCALATE, with the reasoning inline.
 
+Another case exists because an adversarial audit found that
+`classify_truncation` only ever checked for a session deficit, never a
+surplus: a subject serving every real session plus one fabricated bar dated
+a Saturday, priced roughly 300% off, passed every classifier and reached
+`PERMIT`. Fixed in `suite/harness.py`: a subject date strictly inside the
+authority's own covered window that the authority does not carry is now
+`FAIL_UNSAFE` with cause `surplus_session`, bounded to inside the window on
+purpose so a session past the authority's own latest date (which may just
+be a session the authority hasn't caught up to yet) is not flagged the same
+way. Pinned in `suite/selftest.py` (359 cases now, was 356), mutation-tested
+by removing the check and confirming the exploit reopens, and recorded in
+the corpus as `fabricated_session`.
+
 The first thing here that touches a live source:
 
 ```bash
@@ -308,7 +321,7 @@ The authority fetch is cached per ticker for 30 seconds (`healthz` reports the T
 - **There is no persistent issuing identity.** Records are not signed by a key with durable, publicly anchored provenance, and until they are, a signature proves only that the same ephemeral key signed twice.
 - **No buyer has paid for a verification.** Nobody has stated what they would pay, or at what point in their process they would want it.
 - **The gateway is not inline anywhere.** `gateway/decide.py` decides correctly on inputs handed to it, and `/v1/live-check` decides correctly on a live series it fetches itself, over HTTP, under a real policy. That is all that has been demonstrated. Nothing routes production traffic through it, no HTTP surface is deployed anywhere reachable but a developer's own machine, and nobody is blocking live orders or live data with it. Observe mode is a mode in the code, not a running deployment.
-- **The fidelity check compares Close only, and has no exchange-calendar awareness.** `classify_fidelity` compares the subject and authority over the intersection of the dates both sides carry; a subject date the authority never returned is not in that intersection and is never examined. `classify_truncation` fails a session deficit but not a surplus. Found and confirmed directly: a subject serving the real five sessions plus one fabricated Saturday bar, wrong by roughly 300%, is not caught by anything — truncation reads `PASS` ("6 sessions, authority 5"), fidelity reads `PASS` over the five real dates it does share, and the decision is `PERMIT`. Open, High and Low are checked for internal consistency only, never against the authority's own values, which the authority does carry and this method does not yet use. Fixing this correctly means touching `classify_truncation`/`classify_fidelity` in `suite/harness.py`, which is the verification engine the runs under right of reply also depend on, so it needs its own regression against that suite and its own mutation-testing pass, not a patch alongside something else. Not fixed yet; stated here instead of left implicit.
+- **The fidelity check still compares Close only.** `classify_truncation` now catches a subject date inside the authority's own covered window that the authority does not carry (the `surplus_session` fix, described in "See the decision layer," above) — the specific fabricated-Saturday-bar exploit that reached `PERMIT` is closed and pinned in `suite/selftest.py`. What is still open: `classify_fidelity` never examines Open, High or Low against the authority's own values, which the authority does carry and this method does not yet use; only internal OHLC consistency is checked, never fidelity to the source. A subject that fabricates a plausible High/Low around a correct Close, on a real session, would still pass. Not fixed yet; stated here instead of left implicit.
 
 The first record this registry ever issued was withdrawn, because its subject tuple named a version that could not be resolved to anything real. The withdrawal was not deleted and will not be, because a registry that erases its mistakes is asking to be trusted instead of checked. It is not on the register today either, and the reason is worth stating: it is about the same package as the two records under reply, and it is the only subject the page would name at all, so publishing it tells a reader that findings are being withheld about one identified project while showing none of the evidence. That is the accusation the reply window exists to prevent, delivered without the detail its subject would need to answer it. It publishes on the day its successors do.
 

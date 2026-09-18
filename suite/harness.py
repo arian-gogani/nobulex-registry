@@ -1473,7 +1473,8 @@ def _iso_dates(bars, authority=False):
     return out
 
 def classify_truncation(subject_bars, authority_bars):
-    """Probe: did the subject serve fewer sessions than the upstream holds?
+    """Probe: did the subject serve fewer sessions than the upstream holds,
+    or claim sessions inside the upstream's own window that it does not hold?
 
     This counted sessions and nothing else, so a subject returning five bars
     from 1999 where the authority returned five from last week came back PASS
@@ -1481,7 +1482,18 @@ def classify_truncation(subject_bars, authority_bars):
     the same window. Where both sides carry ISO dates the windows are now
     compared, and a subject serving sessions the authority never returned is
     not a truncation result at all, so it resolves to INDETERMINATE and is left
-    to the fidelity probe rather than being called clean here."""
+    to the fidelity probe rather than being called clean here, UNLESS a subject
+    date falls strictly inside the authority's own covered window and the
+    authority does not carry it, in which case it is not a missing session or
+    a window disagreement, it is a fabricated one, and this probe says so
+    directly rather than leaving it to a probe that compares only the dates
+    both sides share and would never look at the one date that mattered.
+
+    Found directly: a subject serving the authority's real sessions plus one
+    fabricated bar dated a Saturday between two of them, priced roughly 300%
+    off, passed every check that existed here and reached PERMIT. The deficit
+    check below only ever looked for s < a; a surplus inside the authority's
+    own window was never examined by anything."""
     if not subject_bars or not authority_bars:
         return INDETERMINATE, None, "one side returned nothing"
     s, a = len(subject_bars), len(authority_bars)
@@ -1526,4 +1538,20 @@ def classify_truncation(subject_bars, authority_bars):
                     f"{min(sd)}..{max(sd)}, authority {min(ad)}..{max(ad)}. "
                     f"Equal counts over different sessions is not a truncation "
                     f"result, whether they differ entirely or nearly so")
+        # A subject date inside the authority's own covered window that the
+        # authority does not carry is not a missing session, it is an extra
+        # one: the subject asserts a session exists on a day the source of
+        # truth says it does not. Bounded to strictly inside [min(ad), max(ad)]
+        # on purpose: a subject date before the authority's earliest or after
+        # its latest may just be a session the authority's window does not
+        # reach yet, which is a coverage question, not a fabrication, and this
+        # probe does not have enough information to tell those apart.
+        extra = sorted(d for d in (sd - ad) if min(ad) < d < max(ad))
+        if extra:
+            shown = ", ".join(extra[:5]) + ("..." if len(extra) > 5 else "")
+            return (FAIL_UNSAFE, "surplus_session",
+                    f"subject carries {len(extra)} session(s) inside the "
+                    f"authority's own {min(ad)}..{max(ad)} window that the "
+                    f"authority does not: {shown}. The authority is the "
+                    f"source of truth for which sessions exist")
     return PASS, None, f"subject {s} sessions, authority {a}"
