@@ -2215,6 +2215,65 @@ gate("commitment / deleting the record and its entry is not a clean verify",
 gate("commitment / --commit refuses to rewrite a commitment and writes nothing",
      _commit_without_amend_rc, (2, True), "detect")
 
+# The defense first_commitments()/rewritten_since_first() exist for is
+# specifically an amend: HEAD disagreeing with disk is caught by the check
+# above without needing this one, but `git commit --amend` erases the
+# disagreeing commit from history entirely, so HEAD and disk end up agreeing
+# and that check goes quiet. unreported_since_first() was tested above as a
+# pure function, against hand-built tuples standing in for what git would
+# have said. Nothing had built an actual repository, tampered, amended the
+# tampering away, and asked cmd_verify() whether it still noticed -- which is
+# the only way to know the pure function is actually being fed what git
+# really returns for this exact sequence, not what a tuple assumed it would.
+
+def _amend_erasure_rc():
+    """First commitment hash A; a second commit tampers to hash B, visible
+    in the log; that second commit is then amended to hash C, with disk
+    updated to match. B is now unreachable, HEAD and disk agree on C, and
+    only the comparison against the first commitment can still see it."""
+    root = _commitment_repo()
+    saved = _point_hold_at(root)
+    try:
+        _quiet(_hold.cmd_commit)
+        _git(root, "init", "-q")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-q", "-m", "first commitment")
+
+        path = _os.path.join(root, "records", "held", _FAKE_FILE)
+        man = _os.path.join(root, "records", "held.manifest.json")
+
+        def rewrite(body):
+            with _io.open(path, "w", encoding="utf-8") as fh:
+                fh.write(body)
+            with _io.open(man, encoding="utf-8") as fh:
+                m = _json.load(fh)
+            m["held"] = [_hold.entry(_FAKE_FILE)]
+            with _io.open(man, "w", encoding="utf-8") as fh:
+                _json.dump(m, fh, indent=2)
+
+        rewrite('{"record_id": "%s", "verdict": "PASS"}' % _FAKE_ID)
+        _git(root, "add", "-A")
+        _git(root, "commit", "-q", "-m", "visible tampering, hash B")
+
+        rewrite('{"record_id": "%s", "verdict": "PASS", "extra": "x"}'
+                % _FAKE_ID)
+        _git(root, "add", "-A")
+        _git(root, "commit", "-q", "--amend", "-m", "amended, B is gone")
+
+        log = _sub.check_output(["git", "log", "--oneline"], cwd=root,
+                                text=True)
+        return _quiet(_hold.cmd_verify), log.count("\n")
+    except _sub.CalledProcessError as e:
+        return "git fixture failed: %s" % e, None
+    finally:
+        (_hold.ROOT, _hold.RECORDS, _hold.HELD, _hold.MANIFEST,
+         _hold.REGISTER) = saved
+        _sh.rmtree(root, ignore_errors=True)
+
+gate("commitment / a tampering commit amended away is still caught, "
+     "against a real repository rather than a hand-built tuple",
+     _amend_erasure_rc, (2, 2), "detect")
+
 # Pure, so they run whether or not git is installed.
 gate("commitment / an unchanged hash is not reported as rewritten",
      lambda: _hold.rewritten_commitments(
