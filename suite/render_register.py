@@ -309,6 +309,29 @@ def load_all():
     """
     out = [(n, r) for n, r in load(RECORDS) + load(HELD_DIR)
            if r.get("schema") != MANIFEST_SCHEMA]
+    # A record_id is unique per finding, but nothing here enforced that
+    # across the two directories. Which directory a file sits in decides
+    # whether THAT file may be published; is_held() is then asked separately
+    # of each file build() sees, with no cross-check that two files did not
+    # claim the same id. A public file under an id, cleared or lacking a
+    # publication block, and a held file under the same id would partition
+    # independently: the public one renders a named verdict, the held one is
+    # only counted toward the embargo tally, and nothing on the page says
+    # the id is also the subject of something the registry is concealing.
+    # Refused here rather than rendered, on the same standard load() already
+    # holds every record to.
+    seen = {}
+    for name, rec in out:
+        rid = rec.get("record_id")
+        if rid is None:
+            continue
+        if rid in seen:
+            raise UnreadableRecord(
+                "record_id %r appears in both %s and %s. An id must be "
+                "unique across records/ and records/held/; two files "
+                "claiming the same id is not a state this renderer can "
+                "safely publish from." % (rid, seen[rid], name))
+        seen[rid] = name
     return sorted(out, key=lambda p: p[1].get("record_id", p[0]))
 
 
@@ -1208,9 +1231,10 @@ def main(argv):
     crashed run, and naming the file says which record cannot be read, where
     a traceback says only that the remedy is broken too.
 
-    "Nothing was written" is a true sentence here because load() is the only
-    thing that raises this, every load happens before the first write in
-    every mode, and both write paths write the page they were handed.
+    "Nothing was written" is a true sentence here because load() and
+    load_all()'s cross-directory record_id check are the only things that
+    raise this, both happen before the first write in every mode, and both
+    write paths write the page they were handed.
     """
     try:
         return render(argv)

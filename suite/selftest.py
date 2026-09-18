@@ -1920,6 +1920,71 @@ gate("renderer / a zero byte record in records/held/ is refused as before",
 gate("renderer / a tree with no stub in it still publishes",
      lambda: _main_rc([]), 0, "quiet")
 
+# ==================== 10c-iv. the same record_id in both directories
+# load_all() partitions records/ and records/held/ independently by each
+# file's own is_held(): nothing checked that the two directories did not
+# claim the same record_id. A public file under an id, cleared, and a held
+# file under the same id would both load, the public one would render a
+# named verdict, and the held one would only be counted toward the embargo
+# tally. Nothing on the page would say the id was also the subject of
+# something the registry was concealing.
+
+def _collision_rc():
+    """Same setup _main_rc uses, plus a held file claiming NBLX-...-780's id.
+
+    This exact scenario turned out to already be refused before this check
+    existed, one step later: the public copy's own id is also the held id,
+    so it prints on the page, and leaked()'s full-page rescan already
+    refuses a held id appearing anywhere in the compiled HTML. Confirmed by
+    mutation-testing the check below -- removing it left rc and
+    output_exists unchanged, only the message changed -- so (rc,
+    output_exists) alone cannot tell the two apart. This checks the message
+    names the actual duplicate-id cause specifically, which is what the new
+    check adds: catching it at its structural source in load_all() rather
+    than relying on the colliding id happening to be visible page text,
+    which is true today but is a fact about rendering, not about the id
+    being duplicated.
+    """
+    import contextlib, io as _i, os as _o, shutil as _s, tempfile as _t
+    root = _t.mkdtemp(prefix="nbx-collide-")
+    recs = _o.path.join(root, "records")
+    held = _o.path.join(recs, "held")
+    _o.makedirs(held)
+    with _i.open(_o.path.join(recs, "NBLX-00000000-780.json"), "w",
+                 encoding="utf-8") as fh:
+        fh.write('{"record_id": "NBLX-00000000-780", "verdict": "PASS",'
+                 ' "subject": {"package": "aqfeed", "commit": "0123456789ab"},'
+                 ' "publication": {"status": "CLEARED"}}')
+    with _i.open(_o.path.join(held, "NBLX-00000000-780.json"), "w",
+                 encoding="utf-8") as fh:
+        fh.write('{"record_id": "NBLX-00000000-780", "verdict": "FAIL_UNSAFE",'
+                 ' "subject": {"package": "aqfeed", "commit": "0123456789ab"},'
+                 ' "publication": {"status": "HELD"}}')
+    keep = (_rr.RECORDS, _rr.HELD_DIR, _rr.MANIFEST_PATH, _rr.OUTPUT,
+            _rr.PREVIEW, _rr.ROOT)
+    try:
+        _rr.RECORDS, _rr.HELD_DIR = recs, held
+        _rr.MANIFEST_PATH = _o.path.join(recs, "held.manifest.json")
+        _rr.OUTPUT = _o.path.join(root, "out", "register.html")
+        _rr.PREVIEW = _o.path.join(root, "private", "register.preview.html")
+        _rr.ROOT = root
+        errbuf = _i.StringIO()
+        with contextlib.redirect_stderr(errbuf):
+            with contextlib.redirect_stdout(_i.StringIO()):
+                rc = _rr.main([])
+        return (rc, _o.path.exists(_rr.OUTPUT),
+                "appears in both" in errbuf.getvalue())
+    except Exception as e:
+        return "RAISED:%s" % type(e).__name__, None, False
+    finally:
+        (_rr.RECORDS, _rr.HELD_DIR, _rr.MANIFEST_PATH, _rr.OUTPUT,
+         _rr.PREVIEW, _rr.ROOT) = keep
+        _s.rmtree(root, ignore_errors=True)
+
+gate("renderer / a record_id claimed by both directories is refused, named "
+     "specifically",
+     lambda: _collision_rc(), (2, False, True), "detect")
+
 # ======================= 10d. the export guard, on a throwaway repository
 #
 # The record ids below are deliberately fictional. The first draft of this
