@@ -2527,6 +2527,89 @@ gate("message / a commit message naming a held record in lower case is found",
                             % _FAKE_ID.lower()) == [_FAKE_ID],
      True, "detect")
 
+# ===== 10f-ii. disclosure_scan(), the call the push hook actually makes
+#
+# Tracked files, git history and commit messages are each tested above by
+# calling the function that scans that one thing. hooks/pre-push never calls
+# any of them: it runs `hold.py --audit`, which dispatches to cmd_audit(),
+# which calls disclosure_scan(held_ids_on_disk()) once, combining all three.
+# Nothing here had called disclosure_scan() itself before this, on a real
+# repository, and confirmed the three results actually reach the one
+# returned rc rather than one masking another on the way out.
+
+def _disclosure_repo(tracked=None, buried=None, message=None):
+    """held.manifest.json for one record, plus whatever `files` describe.
+
+    tracked: written, committed, and left in the working tree -- a live leak
+    a plain `git ls-files` scan would see.
+    buried: committed, then deleted in a second commit -- gone from the tree,
+    still in every clone's history.
+    message: the final commit's message.
+    """
+    root = _tmp.mkdtemp(prefix="nbx-disc-")
+    _os.makedirs(_os.path.join(root, "records"))
+    man = {"schema": "nobulex.held.manifest.v0", "held_count": 1,
+           "held": [{"file": _FAKE_FILE, "bytes": 1, "sha256": "0" * 64,
+                     "record_id": _FAKE_ID, "publication_status": "HELD"}]}
+    with _io.open(_os.path.join(root, "records", "held.manifest.json"), "w",
+                  encoding="utf-8") as fh:
+        _json.dump(man, fh)
+    _git(root, "init", "-q")
+    for path, content in (buried or {}).items():
+        full = _os.path.join(root, path)
+        d = _os.path.dirname(full)
+        if d and not _os.path.isdir(d):
+            _os.makedirs(d)
+        with _io.open(full, "w", encoding="utf-8") as fh:
+            fh.write(content)
+    if buried:
+        _git(root, "add", "-A")
+        _git(root, "commit", "-q", "-m", "carries it")
+        for path in buried:
+            _os.remove(_os.path.join(root, path))
+    for path, content in (tracked or {}).items():
+        full = _os.path.join(root, path)
+        d = _os.path.dirname(full)
+        if d and not _os.path.isdir(d):
+            _os.makedirs(d)
+        with _io.open(full, "w", encoding="utf-8") as fh:
+            fh.write(content)
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", message or "nothing notable", "--allow-empty")
+    return root
+
+def _disclosure(**kwargs):
+    root = _disclosure_repo(**kwargs)
+    saved = _point_hold_at(root)
+    try:
+        return _hold.disclosure_scan({_FAKE_ID})
+    except _sub.CalledProcessError as e:
+        return "git fixture failed: %s" % e
+    finally:
+        (_hold.ROOT, _hold.RECORDS, _hold.HELD, _hold.MANIFEST,
+         _hold.REGISTER) = saved
+        _sh.rmtree(root, ignore_errors=True)
+
+gate("disclosure_scan / a leak in a tracked file alone is caught",
+     lambda: _disclosure(tracked={"notes/audit.md": _RECORD_TEXT}), 2, "detect")
+
+gate("disclosure_scan / a leak only in history is caught, with nothing "
+     "tracked to find it by",
+     lambda: _disclosure(buried={"notes/old.md": _RECORD_TEXT}), 2, "detect")
+
+gate("disclosure_scan / a leak only in a commit message is caught",
+     lambda: _disclosure(
+         message="record: hold %s pending reply" % _FAKE_ID), 2, "detect")
+
+gate("disclosure_scan / all three at once still resolves to one refusal",
+     lambda: _disclosure(tracked={"notes/audit.md": _RECORD_TEXT},
+                         buried={"notes/old.md": _RECORD_TEXT},
+                         message="record: hold %s pending reply" % _FAKE_ID),
+     2, "detect")
+
+gate("disclosure_scan / nothing leaked anywhere returns clean",
+     lambda: _disclosure(tracked={"README.md": "clean"}), 0, "quiet")
+
 # ============ 10g. why P04 through P08 have nothing to read
 #
 # Those five probes all grade one shared live response. When it was unusable

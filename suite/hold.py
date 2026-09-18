@@ -971,9 +971,10 @@ def held_files_in_manifest():
 def disclosure_scan(ids):
     """What this repository would hand a stranger, given the ids to look for.
 
-    Two questions, and the second is the one that has already been answered
-    wrong here once: does any tracked file name a held record, and is any held
-    record still reachable from a commit. Returns 0 or 2.
+    Three questions, and the second is the one that has already been
+    answered wrong here once: does any tracked file name a held record, is
+    any held record still reachable from a commit, and does any commit
+    message name one. Returns 0 or 2.
 
     All three scans compare through ids_in, which compares without regard to
     case. They used to compare exactly, so the same lower-case spelling that
