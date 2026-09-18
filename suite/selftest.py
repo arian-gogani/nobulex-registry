@@ -2236,7 +2236,7 @@ def _amend_erasure_rc():
     try:
         _quiet(_hold.cmd_commit)
         _git(root, "init", "-q")
-        _git(root, "add", "-A")
+        _git(root, "add", "records/held.manifest.json")
         _git(root, "commit", "-q", "-m", "first commitment")
 
         path = _os.path.join(root, "records", "held", _FAKE_FILE)
@@ -2252,12 +2252,12 @@ def _amend_erasure_rc():
                 _json.dump(m, fh, indent=2)
 
         rewrite('{"record_id": "%s", "verdict": "PASS"}' % _FAKE_ID)
-        _git(root, "add", "-A")
+        _git(root, "add", "records/held.manifest.json")
         _git(root, "commit", "-q", "-m", "visible tampering, hash B")
 
         rewrite('{"record_id": "%s", "verdict": "PASS", "extra": "x"}'
                 % _FAKE_ID)
-        _git(root, "add", "-A")
+        _git(root, "add", "records/held.manifest.json")
         _git(root, "commit", "-q", "--amend", "-m", "amended, B is gone")
 
         log = _sub.check_output(["git", "log", "--oneline"], cwd=root,
@@ -2273,6 +2273,53 @@ def _amend_erasure_rc():
 gate("commitment / a tampering commit amended away is still caught, "
      "against a real repository rather than a hand-built tuple",
      _amend_erasure_rc, (2, 2), "detect")
+
+# ===== 10f-iii. cmd_audit(), the actual function hooks/pre-push invokes
+#
+# cmd_verify() and disclosure_scan() are both now tested as whole calls
+# against real repositories. cmd_audit() is `disclosure_scan(...) or rc`,
+# where rc is cmd_verify()'s result -- the one line that combines them into
+# what --audit actually returns. Nothing had called cmd_audit() itself and
+# checked that a disclosure leak is not lost when cmd_verify() is otherwise
+# clean, which is the normal case: a repository with tidy commitments and a
+# leak is not a contradiction, it is the exact situation this check exists
+# to catch.
+
+def _audit_rc(leak=False):
+    """Only the manifest is added, the way a real repository is meant to be
+    committed: held records themselves are never tracked. The first version
+    of this fixture used `git add -A`, which tracked
+    records/held/NBLX-...json along with the manifest, and disclosure_scan()
+    correctly refused it -- the fixture was wrong, not the code, but it is
+    worth naming: a test that accidentally recreates the exact defect the
+    system exists to catch, and then reports the system as broken because
+    the defect was caught, is a false negative shaped like a false positive."""
+    root = _commitment_repo()
+    saved = _point_hold_at(root)
+    try:
+        _quiet(_hold.cmd_commit)
+        _git(root, "init", "-q")
+        _git(root, "add", "records/held.manifest.json")
+        _git(root, "commit", "-q", "-m", "first commitment")
+        if leak:
+            with _io.open(_os.path.join(root, "notes.md"), "w",
+                          encoding="utf-8") as fh:
+                fh.write("waiting on %s" % _FAKE_ID)
+            _git(root, "add", "notes.md")
+            _git(root, "commit", "-q", "-m", "a tracked file names it")
+        return _quiet(_hold.cmd_audit)
+    except _sub.CalledProcessError as e:
+        return "git fixture failed: %s" % e
+    finally:
+        (_hold.ROOT, _hold.RECORDS, _hold.HELD, _hold.MANIFEST,
+         _hold.REGISTER) = saved
+        _sh.rmtree(root, ignore_errors=True)
+
+gate("cmd_audit / clean commitments and no disclosure returns 0",
+     lambda: _audit_rc(leak=False), 0, "quiet")
+
+gate("cmd_audit / a disclosure leak is not lost when commitments are clean",
+     lambda: _audit_rc(leak=True), 2, "detect")
 
 # Pure, so they run whether or not git is installed.
 gate("commitment / an unchanged hash is not reported as rewritten",
