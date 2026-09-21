@@ -45,7 +45,8 @@ from harness import (
     classify_absent_entity, classify_empty_window, classify_invalid_argument,
     classify_padded_argument,
     classify_window_span,
-    classify_fidelity, classify_ohlc, classify_monotonic, classify_freshness,
+    classify_fidelity, classify_range_fidelity, classify_ohlc,
+    classify_monotonic, classify_freshness,
     classify_entity, classify_channel, classify_truncation,
 )
 
@@ -528,6 +529,87 @@ check("fidelity / thin overlap resolves to INDETERMINATE not a verdict",
           ("2026-07-28", 304.0), ("2026-01-02", 10.0),
           ("2026-01-05", 11.0), ("2026-01-06", 12.0),
           ("2026-01-07", 13.0), ("2026-01-08", 14.0)]), TOL),
+      INDETERMINATE, None, "quiet")
+
+# ================= 4a-ii. range fidelity: Open, High and Low, not just Close
+# classify_fidelity above never looks past Close. A subject that reports the
+# authority's Close correctly but fabricates a plausible Open, High or Low
+# around it passed every check that existed: classify_ohlc only checks a
+# bar's own four values against each other, and fidelity never checked range
+# against the source. classify_range_fidelity is a separate function, not a
+# change to classify_fidelity, exactly because every fidelity fixture above
+# uses auth_bars(), which sets Open=High=Low=Close for every session, and
+# comparing that flat authority against CLEAN_BARS' real OHLC would fail on
+# every one of them for a reason that has nothing to do with what those
+# cases test. This authority fixture carries real, distinct OHLC instead.
+
+RANGE_AUTH = [
+    {"date": "2026-07-28", "open": 300.0, "high": 305.0, "low": 299.0,
+     "close": 304.0},
+    {"date": "2026-07-29", "open": 304.0, "high": 309.0, "low": 303.0,
+     "close": 308.0},
+    {"date": "2026-07-30", "open": 308.0, "high": 312.0, "low": 307.0,
+     "close": 311.0},
+    {"date": "2026-07-31", "open": 311.0, "high": 314.0, "low": 309.0,
+     "close": 313.0},
+]
+
+check("range fidelity / a faithful subject's real OHLC passes",
+      classify_range_fidelity(CLEAN_BARS, RANGE_AUTH, TOL),
+      PASS, None, "quiet")
+
+_fab_high = [dict(b) for b in CLEAN_BARS]
+_fab_high[1] = dict(_fab_high[1], High=_fab_high[1]["High"] * 1.05)
+check("range fidelity / a fabricated High around a correct Close is caught",
+      classify_range_fidelity(_fab_high, RANGE_AUTH, TOL),
+      FAIL_UNSAFE, "stale_value", "detect")
+
+_fab_low = [dict(b) for b in CLEAN_BARS]
+_fab_low[2] = dict(_fab_low[2], Low=_fab_low[2]["Low"] * 0.9)
+check("range fidelity / a fabricated Low is caught the same way",
+      classify_range_fidelity(_fab_low, RANGE_AUTH, TOL),
+      FAIL_UNSAFE, "stale_value", "detect")
+
+_range_edge = [dict(b) for b in CLEAN_BARS]
+_range_edge[0] = dict(_range_edge[0],
+                      Open=_range_edge[0]["Open"] * (1 + TOL * 0.5))
+check("range fidelity / sub-tolerance drift on Open is not a failure",
+      classify_range_fidelity(_range_edge, RANGE_AUTH, TOL),
+      PASS, None, "quiet")
+
+check("range fidelity / a subject with no Open/High/Low is not accused",
+      classify_range_fidelity(
+          [{"Date": b["Date"][:10], "Close": b["Close"]} for b in CLEAN_BARS],
+          RANGE_AUTH, TOL),
+      INDETERMINATE, None, "quiet")
+
+_close_only_auth = [{"date": "2026-07-28", "close": 304.0},
+                    {"date": "2026-07-29", "close": 308.0},
+                    {"date": "2026-07-30", "close": 311.0},
+                    {"date": "2026-07-31", "close": 313.0}]
+check("range fidelity / an authority with no Open/High/Low is not treated "
+      "as agreement",
+      classify_range_fidelity(CLEAN_BARS, _close_only_auth, TOL),
+      INDETERMINATE, None, "quiet")
+
+check("range fidelity / CLEAN_AUTH's flat Open=High=Low=Close is real range "
+      "data, not absent data, and a mismatch against it is caught",
+      classify_range_fidelity(CLEAN_BARS, CLEAN_AUTH, TOL),
+      FAIL_UNSAFE, "stale_value", "detect")
+
+check("range fidelity / empty subject resolves to INDETERMINATE not PASS",
+      classify_range_fidelity([], RANGE_AUTH, TOL),
+      INDETERMINATE, None, "quiet")
+
+check("range fidelity / no overlap resolves to INDETERMINATE not PASS",
+      classify_range_fidelity(CLEAN_BARS, [
+          {"date": "2017-07-14", "open": 99.0, "high": 99.5, "low": 98.5,
+           "close": 99.0}], TOL),
+      INDETERMINATE, None, "quiet")
+
+_zero_range_auth = [dict(b, open=0.0, high=0.0, low=0.0) for b in RANGE_AUTH]
+check("range fidelity / an authority range of zero is undefined, not a pass",
+      classify_range_fidelity(CLEAN_BARS, _zero_range_auth, TOL),
       INDETERMINATE, None, "quiet")
 
 # ============================ 4b. a padded argument is not an unhonorable one

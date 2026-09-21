@@ -38,7 +38,12 @@ DATES = ["2026-08-31", "2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04",
          "2026-09-08", "2026-09-09", "2026-09-10", "2026-09-11", "2026-09-14",
          "2026-09-15", "2026-09-16", "2026-09-17"]
 CLOSES = [330.0 + i * 0.4 for i in range(len(DATES))]
-AUTH = [{"date": d, "close": round(c, 2)} for d, c in zip(DATES, CLOSES)]
+# open/high/low are real and distinct from close, not copies of it, so a
+# faithful subject built from this authority actually exercises
+# classify_range_fidelity's comparison rather than trivially matching itself.
+AUTH = [{"date": d, "close": round(c, 2), "open": round(c - 0.3, 2),
+        "high": round(c + 0.7, 2), "low": round(c - 0.6, 2)}
+        for d, c in zip(DATES, CLOSES)]
 
 
 def main():

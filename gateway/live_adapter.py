@@ -48,8 +48,8 @@ from decide import (  # noqa: E402
 )
 from harness import (  # noqa: E402
     CONFIG, AuthorityUnavailable, a1_chart, classify_fidelity,
-    classify_freshness, classify_monotonic, classify_ohlc,
-    classify_truncation,
+    classify_range_fidelity, classify_freshness, classify_monotonic,
+    classify_ohlc, classify_truncation,
 )
 
 POLICY = {
@@ -65,16 +65,32 @@ CONTEXT = {"action": {"notional_usd": 10000}}
 
 
 def authority_bars(ticker):
-    """The authority's own daily series, as {date, close}."""
+    """The authority's own daily series, as {date, close, open, high, low}.
+
+    a1_chart already fetches all four; this used to keep only close, which
+    meant classify_range_fidelity never had an authority to compare a
+    subject's Open, High or Low against here, no matter what the subject
+    reported. open/high/low are carried through now but not required: a
+    session missing one is still usable for close-only comparison."""
     a = a1_chart(ticker, rng="1mo", interval="1d")
-    return [{"date": b["date"], "close": b["close"]}
+    return [{"date": b["date"], "close": b["close"], "open": b.get("open"),
+             "high": b.get("high"), "low": b.get("low")}
             for b in a["bars"] if b.get("close") is not None]
 
 
 def subject_from_authority(auth):
-    """The subject, in the shape a tool would return it (Date/Close ...)."""
-    return [{"Date": b["date"], "Open": b["close"], "High": b["close"],
-             "Low": b["close"], "Close": b["close"]} for b in auth]
+    """The subject, in the shape a tool would return it (Date/Close ...).
+
+    Mirrors the authority's own Open, High and Low when present, rather than
+    flattening all three to Close. A subject built by flattening can never
+    disagree with the authority on range, which is exactly the blind spot
+    classify_range_fidelity exists to close; a faithful subject has to carry
+    the real numbers to be a faithful test of comparing them."""
+    return [{"Date": b["date"], "Close": b["close"],
+             "Open": b["open"] if b.get("open") is not None else b["close"],
+             "High": b["high"] if b.get("high") is not None else b["close"],
+             "Low": b["low"] if b.get("low") is not None else b["close"]}
+            for b in auth]
 
 
 def inject(subject, kind):
@@ -117,6 +133,7 @@ def run(subject, authority, now_utc, policy=POLICY, context=CONTEXT,
     checks = {
         "truncation": classify_truncation(subject, authority),
         "fidelity": classify_fidelity(subject, authority, tol),
+        "range_fidelity": classify_range_fidelity(subject, authority, tol),
         "ohlc": classify_ohlc(subject),
         "monotonic": classify_monotonic(subject),
         "freshness": classify_freshness(

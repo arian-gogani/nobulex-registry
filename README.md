@@ -69,6 +69,22 @@ way. Pinned in `suite/selftest.py` (359 cases now, was 356), mutation-tested
 by removing the check and confirming the exploit reopens, and recorded in
 the corpus as `fabricated_session`.
 
+The remaining half of that same gap is closed too: `classify_fidelity`
+compared Close only, so a subject that fabricated a plausible High or Low
+around a correct Close, on a real session, would still pass. `harness.py`
+now has a second probe, `classify_range_fidelity`, comparing Open, High and
+Low against the authority's own values the same way Close already was, with
+the same tolerance and the same rule that an absent field on either side is
+not compared rather than treated as agreement. Wired into
+`gateway/live_adapter.py`: `authority_bars()` now carries the authority's
+real Open/High/Low instead of dropping them, and `subject_from_authority()`
+mirrors them faithfully instead of flattening all three to Close, which is
+what let this gap go unnoticed by the live demo for as long as it did.
+Verified live: a 2% price corruption is now caught independently by both
+`fidelity` and `range_fidelity`. Pinned in `suite/selftest.py` (378 cases
+now), mutation-tested, and recorded in the fault corpus as
+`fabricated_range`.
+
 The first thing here that touches a live source:
 
 ```bash
@@ -323,11 +339,10 @@ The authority fetch is cached per ticker for 30 seconds (`healthz` reports the T
 - **There is no persistent issuing identity.** Records are not signed by a key with durable, publicly anchored provenance, and until they are, a signature proves only that the same ephemeral key signed twice.
 - **No buyer has paid for a verification.** Nobody has stated what they would pay, or at what point in their process they would want it.
 - **The gateway is not inline anywhere.** `gateway/decide.py` decides correctly on inputs handed to it, and `/v1/live-check` decides correctly on a live series it fetches itself, over HTTP, under a real policy. That is all that has been demonstrated. Nothing routes production traffic through it, no HTTP surface is deployed anywhere reachable but a developer's own machine, and nobody is blocking live orders or live data with it. Observe mode is a mode in the code, not a running deployment.
-- **The fidelity check still compares Close only.** `classify_truncation` now catches a subject date inside the authority's own covered window that the authority does not carry (the `surplus_session` fix, described in "See the decision layer," above) — the specific fabricated-Saturday-bar exploit that reached `PERMIT` is closed and pinned in `suite/selftest.py`. What is still open: `classify_fidelity` never examines Open, High or Low against the authority's own values, which the authority does carry and this method does not yet use; only internal OHLC consistency is checked, never fidelity to the source. A subject that fabricates a plausible High/Low around a correct Close, on a real session, would still pass. Not fixed yet; stated here instead of left implicit.
 
 The first record this registry ever issued was withdrawn, because its subject tuple named a version that could not be resolved to anything real. The withdrawal was not deleted and will not be, because a registry that erases its mistakes is asking to be trusted instead of checked. It is not on the register today either, and the reason is worth stating: it is about the same package as the two records under reply, and it is the only subject the page would name at all, so publishing it tells a reader that findings are being withheld about one identified project while showing none of the evidence. That is the accusation the reply window exists to prevent, delivered without the detail its subject would need to answer it. It publishes on the day its successors do.
 
-Those six gaps are the actual state of this project. Everything above is the design they are being built toward.
+Those five gaps are the actual state of this project. Everything above is the design they are being built toward.
 
 ---
 

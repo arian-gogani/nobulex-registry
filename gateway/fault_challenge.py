@@ -41,8 +41,8 @@ from decide import (  # noqa: E402
     PERMIT, decide, sha256,
 )
 from harness import (  # noqa: E402
-    CONFIG, classify_fidelity, classify_freshness, classify_monotonic,
-    classify_ohlc, classify_truncation,
+    CONFIG, classify_fidelity, classify_range_fidelity, classify_freshness,
+    classify_monotonic, classify_ohlc, classify_truncation,
 )
 
 CORPUS_VERSION = "v1"
@@ -55,7 +55,14 @@ AS_OF = datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc)
 SESSIONS = ["2026-09-10", "2026-09-11", "2026-09-14", "2026-09-15", "2026-09-16"]
 CLOSES = [241.10, 242.05, 240.80, 243.00, 242.60]
 
-AUTHORITY = [{"date": d, "close": c} for d, c in zip(SESSIONS, CLOSES)]
+# open/high/low match bars()'s own derivation formula exactly (close-0.2,
+# close+0.6, close-0.6), so a subject built by bars() unmodified is
+# range-faithful to the authority by construction. Every clean case in this
+# corpus is a bars() subject, so this has to hold or they would spuriously
+# fail range_fidelity for a reason unrelated to what each one tests.
+AUTHORITY = [{"date": d, "close": c, "open": round(c - 0.2, 2),
+             "high": round(c + 0.6, 2), "low": round(c - 0.6, 2)}
+             for d, c in zip(SESSIONS, CLOSES)]
 
 
 def bars(dates=SESSIONS, closes=CLOSES, spread=0.6):
@@ -74,6 +81,7 @@ def run_checks(subject):
     out = {}
     out["truncation"] = classify_truncation(subject, AUTHORITY)
     out["fidelity"] = classify_fidelity(subject, AUTHORITY, tol)
+    out["range_fidelity"] = classify_range_fidelity(subject, AUTHORITY, tol)
     out["ohlc"] = classify_ohlc(subject)
     out["monotonic"] = classify_monotonic(subject)
     out["freshness"] = classify_freshness(
@@ -156,6 +164,14 @@ def fault_cases():
          "truncation's old deficit-only check never looked at a surplus",
          bars(SESSIONS[:2] + ["2026-09-12"] + SESSIONS[2:],
               CLOSES[:2] + [999.99] + CLOSES[2:]), "truncation"),
+
+        ("fabricated_range",
+         "a correct Close on every session, but one session's High is "
+         "fabricated 5% off the authority's; fidelity only ever compared "
+         "Close, and ohlc only checks a bar's own four values against each "
+         "other, so a plausible High around a real Close passed both",
+         [dict(b, High=round(b["High"] * 1.05, 2)) if i == 1 else b
+          for i, b in enumerate(bars())], "range_fidelity"),
     ]
 
 
@@ -216,6 +232,7 @@ def main():
     checks = {
         "truncation": classify_truncation(subject, auth_with_null),
         "fidelity": classify_fidelity(subject, auth_with_null, tol),
+        "range_fidelity": classify_range_fidelity(subject, auth_with_null, tol),
         "ohlc": classify_ohlc(subject),
         "monotonic": classify_monotonic(subject),
         "freshness": classify_freshness(

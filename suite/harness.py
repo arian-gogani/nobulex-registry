@@ -1101,6 +1101,113 @@ def classify_fidelity(subject_bars, authority_bars, tol,
             f"{compared} overlapping sessions compared, worst deviation "
             f"{worst*100:.5f}% within tolerance")
 
+def classify_range_fidelity(subject_bars, authority_bars, tol, min_overlap=None):
+    """Probe: does the adapter stack transmit the upstream's Open, High and
+    Low, not just its Close?
+
+    classify_fidelity above compares Close only. A subject that reports the
+    authority's own Close but fabricates a plausible Open, High or Low around
+    it passes every existing check: classify_ohlc only checks a bar's own
+    four values against each other, and fidelity never looks past Close.
+
+    This is a separate function, not a change to classify_fidelity, on
+    purpose. Every existing fidelity fixture in this suite's own tests builds
+    its authority side with Open=High=Low=Close, a simplification auth_bars()
+    makes for cases that are about Close alone. Comparing that flat authority
+    against a subject's real, distinct OHLC would fail nearly every one of
+    those cases for a reason that has nothing to do with what they test. A
+    caller missing Open/High/Low on either side is unaffected here: nothing
+    fires unless both sides carry all three, the same discipline
+    classify_fidelity already holds for Close.
+    """
+    if min_overlap is None:
+        min_overlap = CONFIG["fidelity_min_overlap_frac"]
+    if not subject_bars:
+        return INDETERMINATE, None, "subject returned no bars to compare"
+    if not authority_bars:
+        return INDETERMINATE, None, "authority returned no bars to compare"
+
+    fields = (("Open", "open"), ("High", "high"), ("Low", "low"))
+
+    sub = {}
+    unreadable = 0
+    for b in subject_bars:
+        if not isinstance(b, dict):
+            unreadable += 1
+            continue
+        d = str(b.get("Date", ""))[:10]
+        vals = {sk: b.get(sk) for sk, _ in fields}
+        if d and all(_numeric(vals[sk]) for sk, _ in fields):
+            sub[d] = vals
+        else:
+            unreadable += 1
+
+    auth = {}
+    auth_unreadable = 0
+    for b in authority_bars:
+        vals = {sk: b.get(ak) for sk, ak in fields}
+        if not all(_numeric(v) for v in vals.values()):
+            auth_unreadable += 1
+            continue
+        auth[_auth_date(b)] = vals
+
+    common = sorted(set(sub) & set(auth))
+    smaller = min(len(subject_bars), len(authority_bars))
+    if auth_unreadable and not auth:
+        return (INDETERMINATE, None,
+                f"all {auth_unreadable} authority bars carried no readable "
+                f"numeric Open, High and Low, so there was nothing to "
+                f"compare the subject's range against")
+    if not common:
+        return (INDETERMINATE, None,
+                f"no overlapping dates with a readable Open, High and Low "
+                f"on both sides. subject={sorted(sub)[:3]} "
+                f"authority={sorted(auth)[:3]}")
+    if len(common) < 2 or (smaller and len(common) < smaller * min_overlap):
+        return (INDETERMINATE, None,
+                f"only {len(common)} of {smaller} sessions align with a "
+                f"readable range on both sides. Below the pinned overlap "
+                f"floor, a value mismatch cannot be separated from a "
+                f"date-basis misalignment, so no range verdict is issued.")
+
+    worst, worst_d, worst_field = 0.0, None, None
+    compared = 0
+    for d in common:
+        for sk, _ in fields:
+            av = auth[d][sk]
+            if av == 0:
+                continue
+            compared += 1
+            rel = abs(sub[d][sk] - av) / abs(av)
+            if rel > worst:
+                worst, worst_d, worst_field = rel, d, sk
+    if compared == 0:
+        return (INDETERMINATE, None,
+                f"{len(common)} sessions aligned but the authority's Open, "
+                f"High and Low were all zero, so relative deviation was "
+                f"undefined and nothing was compared")
+    if worst > tol:
+        return (FAIL_UNSAFE, "stale_value",
+                f"{worst_field} for {worst_d} deviates {worst*100:.4f}% from "
+                f"the same upstream read directly (subject="
+                f"{sub[worst_d][worst_field]}, authority="
+                f"{auth[worst_d][worst_field]}), beyond the {tol*100:.2f}% "
+                f"pinned tolerance")
+    if unreadable or auth_unreadable:
+        sides = []
+        if unreadable:
+            sides.append(f"{unreadable} of {len(subject_bars)} subject bars")
+        if auth_unreadable:
+            sides.append(f"{auth_unreadable} of {len(authority_bars)} "
+                         f"authority bars")
+        return (INDETERMINATE, None,
+                f"{' and '.join(sides)} carried no readable numeric range "
+                f"and were not compared; {compared} field comparisons "
+                f"were, worst deviation {worst*100:.5f}%")
+    return (PASS, None,
+            f"{compared} field comparisons across {len(common)} overlapping "
+            f"sessions, worst deviation {worst*100:.5f}% within tolerance")
+
 def _uniform_lag(sub, auth, tol):
     """Return a nonzero session lag that explains the subject's series, or None.
 
