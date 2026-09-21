@@ -6,9 +6,9 @@ A well-formed lie passes every schema check. This verifies the financial facts b
 
 Financial data first, because it is the one place the right answer is checkable against an outside authority.
 
-The argument underneath this, including what would make it wrong, is in [THESIS.md](THESIS.md).
+[THESIS.md](THESIS.md) holds the argument underneath this, written for the registry rather than the gateway and marked as such at the top. The part that survived the change is the load-bearing one: a signature proves who made a claim, not that the claim was true. Its falsification section still tests the registry thesis, so it is history rather than the current argument, and it says so.
 
-[The method](https://nobulex.com/methodology) · [What would make this wrong](THESIS.md)
+[The method](https://nobulex.com/methodology) · [Why this role has to exist, as first argued](THESIS.md)
 
 ### What is in this repository, and which part is the product
 

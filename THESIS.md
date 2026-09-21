@@ -1,5 +1,30 @@
 # Why this role has to exist
 
+> **This argues for the registry, which is the prior direction, not the
+> gateway, which is the product.** It was written when Nobulex was an
+> independent party grading third-party tools, and it reads that way
+> throughout: "gateway" appears once below, as a category it dismisses, and
+> `PERMIT`, `BLOCK`, `ESCALATE`, Observe Mode and the receipt semantics the
+> site describes appear nowhere in it. Several arguments here assume a subject
+> being graded without paying, who might try to detect the probe. That is not
+> the gateway's situation, where the buyer is the party whose own evidence is
+> checked.
+>
+> It is kept rather than deleted because what sits underneath the packaging is
+> the part that survived, and it is why the gateway exists at all: a signature
+> proves who made a claim, not that the claim was true, and a hash chain makes
+> a false record tamper-evident rather than true. That argument is load-bearing
+> for the gateway, and the site's own receipt page states it.
+>
+> The falsification section has not been rewritten and should be read with
+> that in mind. Its five conditions test the registry thesis, so as a test of
+> the current product they are the wrong five. The gateway versions, none of
+> which are argued below, are: a false-block rate too high for anyone to move
+> from observe to enforce, an INDETERMINATE rate high enough that operators
+> route around the gateway, and a competent team deciding three hundred lines
+> in-house does the same job. Until this is rewritten around those, read it as
+> history rather than as the current argument.
+
 Nobulex independently verifies what machines actually do, so others can decide what they should be allowed to do.
 
 The README of this repository describes the mechanism: what a record is, what the five verdicts mean, what a subject tuple contains, who pays, and what the project has not yet done. This document is the argument underneath it. It is here because a project claiming that evidence must state what it establishes should state what its own reasoning rests on, and should say what would prove it wrong.
