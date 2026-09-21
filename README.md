@@ -10,6 +10,45 @@ The argument underneath this, including what would make it wrong, is in [THESIS.
 
 [The method](https://nobulex.com/methodology) · [What would make this wrong](THESIS.md)
 
+### What is in this repository, and which part is the product
+
+Two surfaces live here, and reading them as one thing is the fastest way to
+come away confused about what is being offered.
+
+**The gateway is the product.** `gateway/` decides whether a specific action
+may execute right now: it verifies the evidence behind the action, evaluates a
+bounded policy, returns `PERMIT`, `BLOCK` or `ESCALATE`, and emits a
+hash-chained receipt. That is what nobulex.com describes and it is where the
+current work goes.
+
+**The registry is a prior direction, kept rather than deleted.** `suite/` is a
+verification harness that grades third-party tools, and the sections further
+down about records, right of reply, publication gates and who pays belong to
+it. Its method is real and its two records are real, so deleting it to make
+the repository tidier would be the wrong instinct: the gateway's classifiers
+*are* the suite's classifiers, and the suite is where they were proven. But
+nothing about the registry is being maintained as a live product, and the site
+says as much. If you are evaluating the gateway, `gateway/` and `examples/`
+are the whole story.
+
+**On the verdict vocabulary,** which looks contradictory across the two and is
+not. Three layers, each narrower than the last:
+
+| Layer | Values | Where |
+|---|---|---|
+| Classifier outcome, per probe | `PASS` `FAIL_UNSAFE` `FAIL_SAFE` `INDETERMINATE` `OUT_OF_SCOPE` | `suite/harness.py` |
+| Evidence status, aggregated | `PASS` `FAIL` `INDETERMINATE` | `gateway/decide.py` |
+| Decision, per action | `PERMIT` `BLOCK` `ESCALATE` | `gateway/decide.py` |
+
+The five collapse into the three: `FAIL_UNSAFE` becomes `FAIL`, while
+`FAIL_SAFE`, `INDETERMINATE` and `OUT_OF_SCOPE` all become `INDETERMINATE`,
+because a source that refused, a probe that could not read its input, and a
+question that did not apply are three different facts and none of them is a
+pass. The policy then maps evidence status to a decision. Evidence status and
+decision are deliberately never merged; collapsing them loses the difference
+between "the facts are wrong" and "your rule is strict," which need different
+responses from an operator.
+
 Run the part that decides whether a verdict means anything:
 
 ```bash
@@ -394,7 +433,15 @@ curl -sS https://nobulex.com/register | shasum -a 256
 
 **This check is currently failing, and the cause is disclosed here rather than left for a reader to discover.** As of 21 September 2026 the committed file prints `c3608fd261e046adf15cd14760f39e65c18c62f3c6b7a689182c82e267fdc783` and the deployed page prints `426be9e4b8dee78d358de7a86adc7b9fa3f68eca8ae762376f83d894e5286fd5`. The difference is eleven lines: a banner hand-added to the website copy during a repositioning, saying the register is a prior direction and pointing at the current one. The banner's content is harmless. Its existence is not, and for precisely the reason the paragraph below gives: something edited the published page after the generator produced it, which is the condition this check exists to detect. The check did its job. It caught its own author.
 
-Restoring the guarantee means one of two things, and the second is the right one: strip the banner so the bytes match again, or move it into `suite/render_register.py` so the generator stays the only author of that page and emits the banner itself. Until one of those lands, treat the sentence above about identical bytes as describing the intended invariant rather than the current state.
+The fix is half landed. The banner now lives in `brand/register.template.html`, so the generator owns it and `--publish` will write it identically to every target, which is what should have happened instead of a hand edit. The renderer already had a `--publish PATH` flag built for exactly this, and its docstring already said why: "a second copy maintained beside the first is how this defect has arrived every time so far." The flag existed and was not used.
+
+What remains is a rebuild, and it cannot happen in a public checkout. `render_register.py` refuses to render where the held records are absent, because compiling the held count from records it cannot see would publish "0 issued and held" over a manifest committing to three. That refusal is correct and is the reason this last step is not done here. The rebuild has to run in the tree that holds the records, as:
+
+```bash
+python3 suite/render_register.py --publish /path/to/nobulex-web/register.html
+```
+
+Until that runs, `brand/register.html` is the pre-banner build and the two hashes above still disagree. The pinned hash in this section will change when it does, and this paragraph should be deleted rather than updated.
 
 Correction provenance: the expiry explanation was changed in the template and identically in the committed and website HTML copies, without rerendering held records. The local copies were compared byte for byte. This was a direct static-copy correction, not a fresh record build; the command above independently checks the deployed copy.
 
