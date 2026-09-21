@@ -41,7 +41,7 @@ python3 gateway/selftest_serve.py
 ```
 
 The fault challenge is the fixed suite a pilot replays, pinned by hash and
-self-checking: eleven well-formed-but-wrong conditions through the real
+self-checking: thirteen well-formed-but-wrong conditions through the real
 classifiers into the real decision layer, with catch rate, false-block rate
 and policy-evaluation latency printed as measurements. It exits nonzero the
 day any fault stops being caught or any clean case stops being permitted.
@@ -104,10 +104,15 @@ not PASS. Its tests stub the network, so the suite still runs offline.
 The integration story for a shadow pilot is one wrapper:
 
 ```python
+import sys; sys.path.insert(0, "gateway")   # or install the package
 from observe import guard
 fetch_bars = guard(fetch_bars, checks=my_checks, policy=my_policy,
                    on_decision=log_or_webhook)
 ```
+
+Every other command here runs from the repository root, so that first line
+is doing real work: `observe` lives in `gateway/`, and without it this
+snippet is the one thing in this README that fails when pasted as written.
 
 In observe mode, the default, the wrapped call is the call it was before:
 same result, same exceptions, even when a fault fires, even when the
@@ -124,12 +129,12 @@ python3 gateway/serve.py --policy gateway/policy.example.json
 curl -s localhost:8830/healthz
 ```
 
-`policy.example.json` gates on quote freshness and turnover fields a live-check has no reason to supply, so it reports those limits `UNEVALUATED` and blocks, correctly. For live-check specifically, start the gateway on a policy scoped to it:
+`policy.example.json` gates on quote freshness and turnover fields a live-check has no reason to supply, so it reports those limits `UNEVALUATED` and blocks, correctly. For live-check specifically, start the gateway on a policy scoped to it. Stop the first server before this, or it binds the same port and Python raises `OSError: Address already in use` rather than anything this project would call a clean refusal:
 
 ```bash
-python3 gateway/serve.py --policy gateway/policy.live-check.example.json --port 8830
-curl -s -XPOST localhost:8830/v1/live-check -d '{"ticker":"AAPL"}'
-curl -s -XPOST localhost:8830/v1/live-check -d '{"ticker":"NOTAREALTICKER"}'
+python3 gateway/serve.py --policy gateway/policy.live-check.example.json --port 8831
+curl -s -XPOST localhost:8831/v1/live-check -d '{"ticker":"AAPL"}'
+curl -s -XPOST localhost:8831/v1/live-check -d '{"ticker":"NOTAREALTICKER"}'
 ```
 
 The checks answer "were these facts correct". `gateway/decide.py` answers the question a caller has to act on: may this specific action execute now. It keeps two surfaces apart on purpose.
@@ -387,7 +392,9 @@ shasum -a 256 brand/register.html
 curl -sS https://nobulex.com/register | shasum -a 256
 ```
 
-Both should print `c3608fd261e046adf15cd14760f39e65c18c62f3c6b7a689182c82e267fdc783` after deployment of the expiry-copy correction.
+**This check is currently failing, and the cause is disclosed here rather than left for a reader to discover.** As of 21 September 2026 the committed file prints `c3608fd261e046adf15cd14760f39e65c18c62f3c6b7a689182c82e267fdc783` and the deployed page prints `426be9e4b8dee78d358de7a86adc7b9fa3f68eca8ae762376f83d894e5286fd5`. The difference is eleven lines: a banner hand-added to the website copy during a repositioning, saying the register is a prior direction and pointing at the current one. The banner's content is harmless. Its existence is not, and for precisely the reason the paragraph below gives: something edited the published page after the generator produced it, which is the condition this check exists to detect. The check did its job. It caught its own author.
+
+Restoring the guarantee means one of two things, and the second is the right one: strip the banner so the bytes match again, or move it into `suite/render_register.py` so the generator stays the only author of that page and emits the banner itself. Until one of those lands, treat the sentence above about identical bytes as describing the intended invariant rather than the current state.
 
 Correction provenance: the expiry explanation was changed in the template and identically in the committed and website HTML copies, without rerendering held records. The local copies were compared byte for byte. This was a direct static-copy correction, not a fresh record build; the command above independently checks the deployed copy.
 

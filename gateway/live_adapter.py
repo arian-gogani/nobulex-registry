@@ -180,9 +180,13 @@ def main():
     print(f"subject: {note}")
     print(f"policy {POLICY['id']} ({sha256(POLICY)[:23]}...)\n")
 
-    print(f"  {'check':12} {'verdict':14} evidence")
+    # 15, not 12: range_fidelity is 14 characters and silently broke the
+    # column when it was added. Width is derived rather than pinned so the
+    # next check to outgrow it does not do the same.
+    w = max(15, *(len(n) for n in checks)) if checks else 15
+    print(f"  {'check':{w}} {'verdict':14} evidence")
     for name, (outcome, cause, evidence) in checks.items():
-        print(f"  {name:12} {outcome:14} {str(evidence)[:70]}")
+        print(f"  {name:{w}} {outcome:14} {str(evidence)[:70]}")
     print()
 
     action = {"type": "broker.order.create", "symbol": args.ticker,

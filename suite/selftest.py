@@ -2767,10 +2767,21 @@ def _disclosure_repo(tracked=None, buried=None, message=None):
     return root
 
 def _disclosure(**kwargs):
+    # _quiet, for the same reason every other helper here uses it, and this
+    # one needed it more than any of them. disclosure_scan writes its
+    # refusal to stderr, and these fixtures deliberately plant a leak, so
+    # running the suite printed "TRACKED FILES NAMING A HELD RECORD" and
+    # "Pushing this repository as it stands publishes every held record in
+    # full" as the first sixty lines of output, above any ok line. It was
+    # fixture noise resolved seventy lines later, but a stranger running
+    # the first command in the README has no way to know that, and the
+    # plainest reading is that the repository they just cloned is leaking
+    # embargoed records. A test that cries wolf about the exact failure the
+    # project exists to prevent is worse than no output at all.
     root = _disclosure_repo(**kwargs)
     saved = _point_hold_at(root)
     try:
-        return _hold.disclosure_scan({_FAKE_ID})
+        return _quiet(_hold.disclosure_scan, {_FAKE_ID})
     except _sub.CalledProcessError as e:
         return "git fixture failed: %s" % e
     finally:
