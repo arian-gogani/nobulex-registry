@@ -1,0 +1,7 @@
+{
+  "note": "There is deliberately no signed artifact for the over-cap case. The cap is enforced at construction, so the object below was refused before a signature existed. This file records the refusal; it is not a receipt.",
+  "attempted_parent_count": 65,
+  "cap": 64,
+  "error": "FanInCapExceeded",
+  "why_not_verifier_side": "A verifier-side cap still permits a signed over-cap object to exist, which a different or older verifier may accept. Refusing before signing means it never existed."
+}

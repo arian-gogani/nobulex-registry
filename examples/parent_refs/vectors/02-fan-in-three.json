@@ -1,0 +1,17 @@
+{
+  "receipt_version": "parent-refs-fixture-1",
+  "action_ref": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "parent_refs": [
+    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  ],
+  "preimage_sha256": "sha256:e9c604e48ad3434a72318f9dd0264fd92b4ceabc6bb01c78eef405bbe2af6757",
+  "signature": {
+    "status": "SIGNED",
+    "alg": "Ed25519",
+    "key_id": "fixture-1",
+    "public_key": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+    "sig": "GfB1WxKgcF0h6AY5LKuO2x2F-zWsQKsHfYbToV_Xe8pjTDYxN2GYqABSkmEeYtepvjmqYs39KWQGXalKpW3xCg=="
+  }
+}
