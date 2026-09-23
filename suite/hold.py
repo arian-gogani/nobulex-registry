@@ -1424,16 +1424,18 @@ def cmd_clear(record_id):
     # because delivery and the reply window are human-paced. Dating the window
     # from the run is what left earlier records expired before anyone could
     # have read them. See _validity_block in suite/run.py.
+    # Always replace the validity window. Older held records may carry the
+    # observation-time window written before this rule existed, and retaining
+    # it would publish a record that was already expired before it cleared.
+    from datetime import timedelta
     val = rec.get("validity") or {}
-    if not val.get("until"):
-        from datetime import timedelta
-        val["from"] = now.isoformat()
-        val["until"] = (now + timedelta(days=7)).isoformat()
-        val["note"] = ("Queried outside this window the record returns "
-                       "EXPIRED regardless of verdict. The window starts at "
-                       "clearing, not at observation, because the record was "
-                       "not readable by anyone before it cleared.")
-        rec["validity"] = val
+    val["from"] = now.isoformat()
+    val["until"] = (now + timedelta(days=7)).isoformat()
+    val["note"] = ("Queried outside this window the record returns "
+                   "EXPIRED regardless of verdict. The window starts at "
+                   "clearing, not at observation, because the record was "
+                   "not readable by anyone before it cleared.")
+    rec["validity"] = val
 
     with io.open(path, "w", encoding="utf-8") as fh:
         json.dump(rec, fh, indent=2, ensure_ascii=False)

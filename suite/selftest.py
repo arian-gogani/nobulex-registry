@@ -3371,6 +3371,42 @@ _results.append((_after_clearing is False, "quiet",
                  _after_clearing, None, False, None,
                  "render_register.is_held() must be False after clearing"))
 
+def _clearing_restarts_an_expired_window():
+    root = _tmp.mkdtemp(prefix="nblx-clear-")
+    saved = _point_hold_at(root)
+    rid = "NBLX-19990101-009"
+    try:
+        _clear_fixture(root, rid,
+                       {"status": "HELD", "held_by": "right_of_reply",
+                        "right_of_reply": _ror(
+                            artifact_delivered_at=_long_ago,
+                            window_closes_at=_past)})
+        path = _os.path.join(root, "records", "held", rid + ".json")
+        with _io.open(path, encoding="utf-8") as fh:
+            rec = _json.load(fh)
+        rec["validity"] = {"from": "1999-01-01T00:00:00+00:00",
+                           "until": "1999-01-08T00:00:00+00:00"}
+        with _io.open(path, "w", encoding="utf-8") as fh:
+            _json.dump(rec, fh)
+        before = datetime.now(timezone.utc)
+        _quiet(_hold.cmd_clear, rid)
+        with _io.open(_os.path.join(root, "records", rid + ".json"),
+                      encoding="utf-8") as fh:
+            validity = _json.load(fh)["validity"]
+        start = datetime.fromisoformat(validity["from"])
+        end = datetime.fromisoformat(validity["until"])
+        return start >= before and end - start == _td(days=7)
+    finally:
+        (_hold.ROOT, _hold.RECORDS, _hold.HELD, _hold.MANIFEST,
+         _hold.REGISTER) = saved
+        _sh.rmtree(root, ignore_errors=True)
+
+_window_restarted = _clearing_restarts_an_expired_window()
+_results.append((_window_restarted is True, "detect",
+                 "clearing replaces an expired observation-time window",
+                 _window_restarted, None, True, None,
+                 "a held record must receive a fresh seven-day window"))
+
 
 # ------------------------------------------------------- 12. the transport
 # Everything above this point tests pure functions on payloads that were typed

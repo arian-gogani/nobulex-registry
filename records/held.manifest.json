@@ -13,42 +13,42 @@
     },
     {
       "file": "NBLX-20260803-002.json",
-      "bytes": 8474,
-      "sha256": "e3d187b56908acddca65fa284f29c967248cae990fbc09ba9867db8e5d3ea97b",
+      "bytes": 8550,
+      "sha256": "7815c726c1df5b6937ea2ffd0226ad3547396ea1999cbeb508bdbcbeed2ece32",
       "record_id": "NBLX-20260803-002",
       "held_by": "right_of_reply",
       "publication_status": "HELD"
     },
     {
       "file": "NBLX-20260803-003.json",
-      "bytes": 16634,
-      "sha256": "450a4f72b6fc0c9a4108ac8bb59ad8bf1ab53892aab963e38392611ba819c35c",
+      "bytes": 16662,
+      "sha256": "b63b1190eedc61d8a949795369e0cb55bb91913d70ebec12ce0292e4f3495324",
       "record_id": "NBLX-20260803-003",
       "held_by": "right_of_reply",
       "publication_status": "HELD"
     },
     {
       "file": "NBLX-20260908-001.json",
-      "bytes": 16714,
-      "sha256": "242210ff7506332ebf6ebc9485d7b2ecac397050940e23b5ea6f5b4f328aec83",
+      "bytes": 16799,
+      "sha256": "db0265afbb2195e537a4114c690755181e1866dbc74f2d703b19052c65512bc3",
       "record_id": "NBLX-20260908-001",
       "held_by": "right_of_reply",
       "publication_status": "HELD"
     },
     {
       "file": "right-of-reply-002.md",
-      "bytes": 7364,
-      "sha256": "a919943b8f98dbefed7d8ad3fd1eef8f021e4fe80da7590b4bccda760c83c418"
+      "bytes": 7407,
+      "sha256": "e238d14b8564c1c84153bfbe876b012fe7830cb140baff993d021c54a8eced7a"
     },
     {
       "file": "right-of-reply-003.md",
-      "bytes": 7528,
-      "sha256": "ad4d2febc2d924d4fcd651c4cf379d70bfaf097ac3ec4c8c0dc30cee721447d2"
+      "bytes": 7116,
+      "sha256": "946dad6a4bffd6f31f4f83211a2330be9d299665cdf392d6eb34189f70965ee0"
     },
     {
       "file": "right-of-reply-20260908-001.md",
-      "bytes": 6065,
-      "sha256": "5890de5d3cc2561f6b30b148120a7ff29caaa0b8342b3f79f0d13477b6886dff"
+      "bytes": 6108,
+      "sha256": "2db20162e20bc7b5083500f498e4f63dc8999fa1ddd1d97c028e8af4fe23294c"
     }
   ]
 }
