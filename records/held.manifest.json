@@ -1,7 +1,7 @@
 {
   "schema": "nobulex.held.manifest.v0",
   "purpose": "Each entry commits to one held file by sha256 without disclosing what it says. When the file publishes, hash it and compare: equal means the record was not altered while its subject held the right to answer it. The subject is deliberately absent, because a record held under right of reply is adverse by definition, and naming who it is about would publish the accusation while withholding the evidence for it.",
-  "held_count": 5,
+  "held_count": 7,
   "held": [
     {
       "file": "NBLX-20260802-001.withdrawn.json",
@@ -28,6 +28,14 @@
       "publication_status": "HELD"
     },
     {
+      "file": "NBLX-20260908-001.json",
+      "bytes": 16714,
+      "sha256": "242210ff7506332ebf6ebc9485d7b2ecac397050940e23b5ea6f5b4f328aec83",
+      "record_id": "NBLX-20260908-001",
+      "held_by": "right_of_reply",
+      "publication_status": "HELD"
+    },
+    {
       "file": "right-of-reply-002.md",
       "bytes": 7364,
       "sha256": "a919943b8f98dbefed7d8ad3fd1eef8f021e4fe80da7590b4bccda760c83c418"
@@ -36,6 +44,11 @@
       "file": "right-of-reply-003.md",
       "bytes": 7528,
       "sha256": "ad4d2febc2d924d4fcd651c4cf379d70bfaf097ac3ec4c8c0dc30cee721447d2"
+    },
+    {
+      "file": "right-of-reply-20260908-001.md",
+      "bytes": 6065,
+      "sha256": "5890de5d3cc2561f6b30b148120a7ff29caaa0b8342b3f79f0d13477b6886dff"
     }
   ]
 }
