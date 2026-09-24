@@ -1162,12 +1162,22 @@ def build(preview=False):
         # fixing something else. The count of what is withheld does not change
         # here; what changes is that the page no longer implies all of it is
         # in force.
+        # "Nothing on this page is typed by hand" used to sit here and became
+        # false the moment a prior-direction banner was hand-added to the
+        # deployed copy of this page. The sentence was still rendering,
+        # directly above the banner that falsified it, which is worse than
+        # either the banner or the sentence alone: the page was asserting an
+        # integrity property about itself that a reader could disprove by
+        # scrolling up. The banner now lives in the template so the generator
+        # authors it, and the sentence says what is actually guaranteed,
+        # which is about the counts and the records, not about every byte.
         note = ('    <p class="note">%d record%s published, %d issued and '
                 'held (%d of those withdrawn and no longer in force), and %d '
                 'withdrawn and published, compiled from the records on every '
-                'build. %s%s%sNothing on this page is typed by hand, because '
-                'the one time it was, it published a subject that could not '
-                'be resolved.</p>\n'
+                'build. %s%s%sThese counts and every record shown are '
+                'compiled by the generator, never typed by hand, because the '
+                'one time a subject was written in by hand it published one '
+                'that could not be resolved.</p>\n'
                 % (len(shown), "" if len(shown) == 1 else "s",
                    len(held), len(held_dead), len(dead),
                    empty, inforce, retracted))
