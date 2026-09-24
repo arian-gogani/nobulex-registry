@@ -114,6 +114,31 @@ def build_receipt(action_ref, parent_refs, signer=None):
     return body
 
 
+def adversarial_build_receipt(action_ref, parent_refs, signer):
+    """Build and sign an over-cap receipt, the way an attacker would.
+
+    This deliberately does NOT call canonical_parent_refs, so the cap never
+    fires. It exists because the constructor-side cap proves only that a
+    CONFORMING producer will not emit an over-cap object. It says nothing
+    about an attacker, who does not use our constructor and has no reason
+    to honour a limit that lives in it.
+
+    The sort and dedupe rules are still applied, so the resulting object is
+    well-formed in every respect except the one under test. An artifact
+    that failed two rules at once would not isolate which one the verifier
+    caught it on.
+    """
+    unique = sorted(set(parent_refs), key=lambda s: s.encode("utf-8"))
+    body = {
+        "receipt_version": "parent-refs-fixture-1",
+        "action_ref": action_ref,
+        "parent_refs": unique,
+    }
+    body["preimage_sha256"] = sha256(body)
+    body["signature"] = signer(_canonical(body))
+    return body
+
+
 def _signer():
     """Ed25519 over the canonical preimage, or None if unavailable."""
     try:
@@ -150,6 +175,20 @@ def verify(obj, key):
             _canonical(body))
     except Exception:
         return False, "signature does not verify"
+    # The cap is checked AFTER the signature, deliberately, so that reaching
+    # this line proves the signature was cryptographically valid. An object
+    # rejected here was signed correctly by someone holding the key and is
+    # still refused, which is the whole claim. Checking the cap first would
+    # leave "was the signature even good?" unanswered.
+    #
+    # This check is what the constructor-side cap cannot provide. A producer
+    # that refuses to build an over-cap object constrains conforming
+    # producers only; nothing stops an attacker writing their own producer
+    # and signing 65 parents. Pointed out in review on AST09 #44, and the
+    # fixture was incomplete until it existed.
+    n = len(obj.get("parent_refs") or [])
+    if n > MAX_PARENTS:
+        return False, f"fan_in_cap_exceeded: {n} parents, cap is {MAX_PARENTS}"
     return True, "ok"
 
 
@@ -195,9 +234,39 @@ def main():
     except FanInCapExceeded:
         print("  ok    one over the cap refuses to build")
     # The claim is not merely that it raises. It is that no signed artifact
-    # exists, which is what the raise is for.
-    check("and therefore no signed over-cap artifact exists",
+    # exists FROM A CONFORMING PRODUCER, which is what the raise is for.
+    check("and therefore this producer emits no signed over-cap artifact",
           (OUT / "04-fan-in-cap-exceeded.json").exists(), False)
+
+    print("\nBut a conforming producer is not the threat model\n")
+    # Raised in review on AST09 #44: the constructor cap binds only
+    # producers who use this constructor. An attacker writes their own.
+    # Until the verifier refuses an already-signed over-cap object, the
+    # cap is a coding convention, not a property of the format.
+    adv = adversarial_build_receipt("sha256:" + "44" * 32, over_cap, sign)
+    check("an attacker can build and sign 65 parents anyway",
+          len(adv["parent_refs"]), MAX_PARENTS + 1)
+
+    # The signature on it is genuinely valid. Proven by checking it
+    # directly, so "rejected" cannot be confused with "malformed".
+    import base64 as _b64
+    _body = {k: v for k, v in adv.items() if k != "signature"}
+    try:
+        key.public_key().verify(
+            _b64.urlsafe_b64decode(adv["signature"]["sig"]),
+            _canonical(_body))
+        sig_ok = True
+    except Exception:
+        sig_ok = False
+    check("and its signature is cryptographically valid", sig_ok, True)
+
+    ok, why = verify(adv, key)
+    check("yet the verifier refuses it", ok, False)
+    check("and refuses it for the cap, not for a bad signature",
+          why.startswith("fan_in_cap_exceeded"), True)
+
+    (OUT / "05-fan-in-cap-exceeded.SIGNED-ADVERSARIAL.json").write_text(
+        json.dumps(adv, indent=2) + "\n")
 
     print("\nArtifacts\n")
     vectors = [
