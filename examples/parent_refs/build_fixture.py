@@ -101,16 +101,24 @@ def build_receipt(action_ref, parent_refs, signer=None):
     causal claim is as tamper-evident as the rest of the record.
     """
     body = {
-        "receipt_version": "parent-refs-fixture-1",
+        "receipt_version": "parent-refs-fixture-2",
         "action_ref": action_ref,
         "parent_refs": canonical_parent_refs(parent_refs),
     }
-    body["preimage_sha256"] = sha256(body)
     if signer is None:
         body["signature"] = {"status": "UNSIGNED",
                              "detail": "no signing key supplied"}
-    else:
-        body["signature"] = signer(_canonical(body))
+        body["preimage_sha256"] = sha256(body)
+        return body
+    # The signature METADATA goes into the body before the preimage is
+    # computed, so alg, key_id and public_key are covered by the signature.
+    # In fixture-1 they sat outside it and were freely editable: swapping
+    # public_key to an attacker value and alg to "none" left verify()
+    # returning ok. Only `sig` itself is added afterwards, because a
+    # signature cannot cover itself.
+    body["signature"] = dict(signer.meta)
+    body["preimage_sha256"] = sha256(body)
+    body["signature"]["sig"] = signer(_canonical(body))
     return body
 
 
@@ -129,13 +137,25 @@ def adversarial_build_receipt(action_ref, parent_refs, signer):
     caught it on.
     """
     unique = sorted(set(parent_refs), key=lambda s: s.encode("utf-8"))
-    body = {
-        "receipt_version": "parent-refs-fixture-1",
+    return adversarial_sign({
+        "receipt_version": "parent-refs-fixture-2",
         "action_ref": action_ref,
         "parent_refs": unique,
-    }
+    }, signer)
+
+
+def adversarial_sign(body, signer):
+    """Sign an arbitrary body, applying no rule whatsoever.
+
+    The generic form of adversarial_build_receipt. An attacker's producer is
+    just this: a signing key and no constraints. Every structural rule the
+    verifier claims to enforce gets a vector built through here, because a
+    rule only checked in the constructor is not enforced at all.
+    """
+    body = dict(body)
+    body["signature"] = dict(signer.meta)
     body["preimage_sha256"] = sha256(body)
-    body["signature"] = signer(_canonical(body))
+    body["signature"]["sig"] = signer(_canonical(body))
     return body
 
 
@@ -153,42 +173,116 @@ def _signer():
     pub = base64.urlsafe_b64encode(key.public_key().public_bytes_raw()).decode()
 
     def sign(preimage: bytes):
-        return {"status": "SIGNED", "alg": "Ed25519", "key_id": "fixture-1",
-                "public_key": pub,
-                "sig": base64.urlsafe_b64encode(key.sign(preimage)).decode()}
+        """Return only the signature value. Metadata is sign.meta."""
+        return base64.urlsafe_b64encode(key.sign(preimage)).decode()
+
+    # Static, and placed in the body BEFORE the preimage is computed so it is
+    # signed over. public_key is carried for provenance only; verify() below
+    # refuses to resolve a key from it, which is the property the negative
+    # vectors in ScopeBlind #24 exist to pin.
+    sign.meta = {"status": "SIGNED", "alg": "Ed25519", "key_id": "fixture-1",
+                 "public_key": pub}
     return sign, key
 
 
-def verify(obj, key):
-    """Recompute the preimage and check the signature. Returns (ok, why)."""
-    if obj.get("signature", {}).get("status") != "SIGNED":
+def check_parent_refs(refs):
+    """Every structural rule, re-checked from scratch. Returns None or why.
+
+    This exists because fixture-1 enforced all of these in the CONSTRUCTOR
+    and none of them in the verifier. A reviewer on AST09 #44 pointed out
+    that a constructor-side cap binds conforming producers only, which was
+    correct; the fix added a verifier cap and stopped there, reproducing the
+    identical error on four other rules. An audit then walked through the
+    door: unsorted, duplicated, non-string and absent parent_refs all
+    verified `ok`, and 1000 refs nested inside one list element passed the
+    cap because len() saw a single slot.
+
+    So the rule here is not "check the cap too". It is that a verifier
+    re-derives every property it depends on, from the object in front of it,
+    trusting no producer. Each rule below is one an attacker's producer
+    would simply not apply.
+    """
+    if refs is None:
+        return "parent_refs absent; the field is required, and its absence " \
+               "is not the same claim as an empty list"
+    if not isinstance(refs, list):
+        return f"parent_refs is {type(refs).__name__}, not a list"
+    for i, r in enumerate(refs):
+        if not isinstance(r, str):
+            # The nesting bypass lived here. A list inside the list is one
+            # slot to len() and any number of parents to a reader.
+            return (f"parent_refs[{i}] is {type(r).__name__}, not a string; "
+                    f"a nested container would let len() undercount the "
+                    f"real fan-in")
+    if len(refs) > MAX_PARENTS:
+        return f"fan_in_cap_exceeded: {len(refs)} parents, cap is {MAX_PARENTS}"
+    if len(set(refs)) != len(refs):
+        return "parent_refs contains duplicates"
+    if refs != sorted(refs, key=lambda s: s.encode("utf-8")):
+        return "parent_refs is not sorted ascending as UTF-8 byte strings"
+    return None
+
+
+def verify(obj, key, embedded_key_is_untrusted=True):
+    """Check signature and structure. Returns (ok, why). Never raises.
+
+    `key` is supplied by the caller, out of band, always. The object may
+    carry a public_key for provenance and this function will not resolve
+    one from it: a signature that verifies under a key the object supplied
+    proves only that one party wrote both halves. That is the property
+    ScopeBlind's negative vectors pin, and publishing a fixture that
+    violated it while contributing those vectors would have been absurd.
+    """
+    if not isinstance(obj, dict):
+        return False, f"receipt is {type(obj).__name__}, not an object"
+    sig_block = obj.get("signature")
+    if not isinstance(sig_block, dict):
+        return False, "signature block missing or not an object"
+    if sig_block.get("status") != "SIGNED":
         return False, "unsigned"
+    if sig_block.get("alg") != "Ed25519":
+        return False, f"unsupported alg {sig_block.get('alg')!r}"
     import base64
+
+    # Rebuild exactly what was signed: everything except `sig`, which cannot
+    # cover itself. alg, key_id and public_key ARE inside, so swapping them
+    # now breaks the signature rather than going unnoticed.
     body = {k: v for k, v in obj.items() if k != "signature"}
+    meta = {k: v for k, v in sig_block.items() if k != "sig"}
+    body["signature"] = meta
     stated = body.pop("preimage_sha256", None)
     if sha256(body) != stated:
         return False, "preimage_sha256 does not match the body"
     body["preimage_sha256"] = stated
     try:
         key.public_key().verify(
-            base64.urlsafe_b64decode(obj["signature"]["sig"]),
+            base64.urlsafe_b64decode(sig_block.get("sig") or ""),
             _canonical(body))
     except Exception:
         return False, "signature does not verify"
-    # The cap is checked AFTER the signature, deliberately, so that reaching
-    # this line proves the signature was cryptographically valid. An object
-    # rejected here was signed correctly by someone holding the key and is
-    # still refused, which is the whole claim. Checking the cap first would
-    # leave "was the signature even good?" unanswered.
-    #
-    # This check is what the constructor-side cap cannot provide. A producer
-    # that refuses to build an over-cap object constrains conforming
-    # producers only; nothing stops an attacker writing their own producer
-    # and signing 65 parents. Pointed out in review on AST09 #44, and the
-    # fixture was incomplete until it existed.
-    n = len(obj.get("parent_refs") or [])
-    if n > MAX_PARENTS:
-        return False, f"fan_in_cap_exceeded: {n} parents, cap is {MAX_PARENTS}"
+
+    if embedded_key_is_untrusted and sig_block.get("public_key"):
+        # Present, signed over, and deliberately not used to verify anything.
+        pass
+
+    # Structure is checked AFTER the signature so that reaching here proves
+    # the signature was cryptographically valid. An object refused below was
+    # signed correctly by someone holding the key and is still rejected,
+    # which is the entire claim. Checking structure first would leave "was
+    # the signature even good?" unanswered.
+    # Wrapped, because "returns a verdict, never raises" must hold even if
+    # check_parent_refs itself has a gap. Found by mutation: disabling the
+    # string-type check let a nested list reach `set(refs)`, which raises
+    # TypeError on an unhashable element. The guard ordering happened to
+    # prevent it, which is not the same as the contract holding. A verifier
+    # that raises on hostile input hands the attacker a crash instead of a
+    # rejection, and a harness looping over receipts dies mid-batch.
+    try:
+        why = check_parent_refs(obj.get("parent_refs"))
+    except Exception as e:  # noqa: BLE001
+        return False, f"parent_refs could not be checked: {type(e).__name__}"
+    if why:
+        return False, why
     return True, "ok"
 
 
@@ -235,8 +329,21 @@ def main():
         print("  ok    one over the cap refuses to build")
     # The claim is not merely that it raises. It is that no signed artifact
     # exists FROM A CONFORMING PRODUCER, which is what the raise is for.
-    check("and therefore this producer emits no signed over-cap artifact",
-          (OUT / "04-fan-in-cap-exceeded.json").exists(), False)
+    # This used to assert that a file named 04-fan-in-cap-exceeded.json did
+    # not exist. Nothing ever writes that name (the refusal record is
+    # ...REFUSAL.json), so it passed unconditionally and would have passed
+    # just as happily if an over-cap object HAD been signed and written. A
+    # test that cannot fail, in a file arguing that tests must be able to
+    # fail. It now asserts the thing actually meant: no artifact this
+    # producer emits carries more than the cap.
+    def _parents(p):
+        try:
+            return len(json.loads(p.read_text()).get("parent_refs") or [])
+        except Exception:
+            return 0
+    emitted = [p for p in OUT.glob("*.json") if "ADVERSARIAL" not in p.name]
+    check("and no artifact this producer emitted is over the cap",
+          max([_parents(p) for p in emitted] or [0]) <= MAX_PARENTS, True)
 
     print("\nBut a conforming producer is not the threat model\n")
     # Raised in review on AST09 #44: the constructor cap binds only
@@ -247,10 +354,16 @@ def main():
     check("an attacker can build and sign 65 parents anyway",
           len(adv["parent_refs"]), MAX_PARENTS + 1)
 
-    # The signature on it is genuinely valid. Proven by checking it
-    # directly, so "rejected" cannot be confused with "malformed".
+    # The signature on it is genuinely valid. Proven by checking it directly,
+    # so "rejected" cannot be confused with "malformed". The preimage is
+    # rebuilt exactly as verify() rebuilds it: everything except `sig`,
+    # signature metadata included, since that metadata is now signed over.
     import base64 as _b64
     _body = {k: v for k, v in adv.items() if k != "signature"}
+    _body["signature"] = {k: v for k, v in adv["signature"].items()
+                          if k != "sig"}
+    _stated = _body.pop("preimage_sha256")
+    _body["preimage_sha256"] = _stated
     try:
         key.public_key().verify(
             _b64.urlsafe_b64decode(adv["signature"]["sig"]),
@@ -267,6 +380,77 @@ def main():
 
     (OUT / "05-fan-in-cap-exceeded.SIGNED-ADVERSARIAL.json").write_text(
         json.dumps(adv, indent=2) + "\n")
+
+    print("\nEvery other construction rule, attacked the same way\n")
+    # An audit of the previous version walked straight through all of these.
+    # Each was enforced in the constructor and unchecked in the verifier,
+    # which is the identical error the reviewer had already named once about
+    # the cap. Fixing only the instance you are shown reproduces the class.
+    ok3 = "sha256:" + "aa" * 32
+    attacks = [
+        ("nested", [[f"sha256:{i:064x}" for i in range(1000)]],
+         "not a string", "1000 parents hidden in one list slot"),
+        ("unsorted", ["sha256:zzz", "sha256:aaa"],
+         "not sorted", "byte order violated"),
+        ("duplicated", [ok3, ok3, ok3],
+         "duplicates", "same parent claimed three times"),
+        ("non-string", [1, 2, 3],
+         "not a string", "integers where refs belong"),
+        ("wrong-type", "sha256:abc",
+         "not a list", "a bare string counted by character"),
+    ]
+    for name, refs, expect, why_it_matters in attacks:
+        o = adversarial_sign({"receipt_version": "parent-refs-fixture-2",
+                              "action_ref": "sha256:" + "55" * 32,
+                              "parent_refs": refs}, sign)
+        ok, why = verify(o, key)
+        check(f"{name}: refused ({why_it_matters})", ok, False)
+        check(f"{name}: and for the right reason", expect in why, True)
+
+    # Absent is its own case: the field is required, and its absence is a
+    # different claim from an empty list. Both must be decidable.
+    o = adversarial_sign({"receipt_version": "parent-refs-fixture-2",
+                          "action_ref": "sha256:" + "66" * 32}, sign)
+    ok, why = verify(o, key)
+    check("absent parent_refs is refused, not treated as zero parents",
+          (ok, "absent" in why), (False, True))
+
+    print("\nThe signature block is inside the preimage now\n")
+    # fixture-1 signed the body and left alg, key_id and public_key outside
+    # it. Swapping public_key to an attacker value and alg to "none" left
+    # verify() returning ok, on an artifact that advertises an embedded key.
+    # That is exactly what ScopeBlind #24's negative vectors forbid, and it
+    # was published here while contributing those vectors.
+    tampered = json.loads(json.dumps(
+        build_receipt("sha256:" + "77" * 32, [ok3], sign)))
+    check("baseline verifies", verify(tampered, key)[0], True)
+    tampered["signature"]["public_key"] = "ATTACKER-CONTROLLED"
+    ok, why = verify(tampered, key)
+    # Caught by the preimage comparison, which runs first, rather than by the
+    # signature check. Either would be correct; what matters is that it is
+    # caught at all. In fixture-1 it was caught by neither and returned ok.
+    check("swapping the embedded public_key is detected",
+          (ok, "preimage_sha256" in why or "signature does not verify" in why),
+          (False, True))
+    tampered2 = json.loads(json.dumps(
+        build_receipt("sha256:" + "88" * 32, [ok3], sign)))
+    tampered2["signature"]["alg"] = "none"
+    ok2, why2 = verify(tampered2, key)
+    check("and so does downgrading alg to none", ok2, False)
+
+    print("\nverify() returns, it does not raise\n")
+    # A harness looping over untrusted receipts must get a verdict, not a
+    # traceback. parent_refs: 5 used to raise TypeError out of len().
+    for bad in (5, None, {"a": 1}, True):
+        o = adversarial_sign({"receipt_version": "parent-refs-fixture-2",
+                              "action_ref": "sha256:" + "99" * 32,
+                              "parent_refs": bad}, sign)
+        try:
+            ok, why = verify(o, key)
+            check(f"parent_refs={bad!r} returns a verdict", ok, False)
+        except Exception as e:
+            check(f"parent_refs={bad!r} returns a verdict",
+                  f"RAISED {type(e).__name__}", False)
 
     print("\nArtifacts\n")
     vectors = [

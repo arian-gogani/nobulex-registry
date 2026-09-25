@@ -1,5 +1,5 @@
 {
-  "receipt_version": "parent-refs-fixture-1",
+  "receipt_version": "parent-refs-fixture-2",
   "action_ref": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
   "parent_refs": [
     "sha256:0000000000000000000000000000000000000000000000000000000000000000",
@@ -68,12 +68,12 @@
     "sha256:000000000000000000000000000000000000000000000000000000000000003f",
     "sha256:0000000000000000000000000000000000000000000000000000000000000040"
   ],
-  "preimage_sha256": "sha256:04be67c5cb73d5b92d35a195b3df5c86e08dd7538a83fa5da648998fa9eb0853",
   "signature": {
     "status": "SIGNED",
     "alg": "Ed25519",
     "key_id": "fixture-1",
     "public_key": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
-    "sig": "91x-E5PoEzhPpO_CRYo_lMJgodXcKAFhJfW6pLjXQi_zfOgTuNYB4hj-dE71yRwGpW3usp4YJIUSRBkAFH1hCg=="
-  }
+    "sig": "Lq5bdVII-I67rJ0HcqAOD9clDj78rbqF_4zl5JcfT0IfXJIk8glxmd3zqWnXYbNKVeBmyb_dxxT1U1GvJcjmBw=="
+  },
+  "preimage_sha256": "sha256:82a07856b0cde1faa47d74f7e9036350f99611e80f51b4069f5c7f5718947532"
 }
