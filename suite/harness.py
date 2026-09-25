@@ -1683,6 +1683,26 @@ def classify_truncation(subject_bars, authority_bars):
         # its latest may just be a session the authority's window does not
         # reach yet, which is a coverage question, not a fabrication, and this
         # probe does not have enough information to tell those apart.
+        # Sessions the subject carries that the authority does not, split by
+        # whether the authority's window can speak to them at all.
+        #
+        # OUTSIDE the window, the honest answer is INDETERMINATE and it used
+        # to be PASS. A subject dated before the authority's earliest may
+        # simply hold deeper history than the range this run requested; one
+        # dated after its latest may be a session the authority has not
+        # published yet. Neither is provably fabricated. But neither was
+        # COMPARED, and the evidence string said "subject 6 sessions,
+        # authority 5" as though the sixth had been examined and agreed.
+        # That is the same defect as the zeroed-authority skip fixed in
+        # classify_fidelity: a count presented as a comparison. Measured
+        # before this change, a fabricated session dated one day before the
+        # authority's earliest passed all six probes and reached PERMIT.
+        #
+        # INSIDE the window the authority is authoritative, so an extra
+        # session there is a positive claim contradicted by the source of
+        # truth, and stays FAIL_UNSAFE.
+        outside = sorted(d for d in (sd - ad)
+                         if d < min(ad) or d > max(ad))
         extra = sorted(d for d in (sd - ad) if min(ad) < d < max(ad))
         if extra:
             shown = ", ".join(extra[:5]) + ("..." if len(extra) > 5 else "")
@@ -1691,4 +1711,28 @@ def classify_truncation(subject_bars, authority_bars):
                     f"authority's own {min(ad)}..{max(ad)} window that the "
                     f"authority does not: {shown}. The authority is the "
                     f"source of truth for which sessions exist")
+        if outside:
+            # Deliberately still a PASS, and the first attempt at this got it
+            # wrong. Returning INDETERMINATE here abstained on any subject
+            # holding deeper history than the range this run requested, which
+            # is most of them, and it duplicated a decision the overlap floor
+            # above already makes: that floor is what decides whether two
+            # windows are comparable at all. A second, stricter gate bypassing
+            # it made the probe stop answering, which suite/selftest.py
+            # already had a case pinned against.
+            #
+            # What was actually wrong was the evidence, not the verdict. It
+            # read "subject 6 sessions, authority 5" when the sixth had never
+            # been looked at, which is a count presented as a comparison. The
+            # sessions are named now, so a reader can see the comparison was
+            # thinner than the counts imply and decide what that is worth.
+            shown = ", ".join(outside[:5]) + ("..." if len(outside) > 5 else "")
+            return (PASS, None,
+                    f"subject {s} sessions, authority {a}; the windows overlap "
+                    f"above the pinned floor and no session is missing inside "
+                    f"the authority's {min(ad)}..{max(ad)} range. "
+                    f"{len(outside)} subject session(s) fall outside it and "
+                    f"were not compared by this probe: {shown}. This probe "
+                    f"answers truncation only; an out-of-range session is not "
+                    f"evidence of fabrication and is not evidence against it")
     return PASS, None, f"subject {s} sessions, authority {a}"

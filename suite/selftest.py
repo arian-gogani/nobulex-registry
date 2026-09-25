@@ -990,6 +990,55 @@ check("truncation / a session after the authority's latest is not flagged "
       classify_truncation(_SUBJECT_PLUS_NEWER, _REAL_AUTH),
       PASS, None, "quiet")
 
+# It passes, but it must not pass SILENTLY. The evidence used to read
+# "subject 6 sessions, authority 5" and nothing else, which is a count
+# presented as a comparison: the sixth session was never looked at, and a
+# reader had no way to know the comparison was thinner than the counts imply.
+#
+# An earlier attempt at this returned INDETERMINATE instead. That was wrong
+# and the case above caught it: abstaining here would abstain on any subject
+# holding deeper history than the range a run requested, which is most of
+# them, and it duplicates the decision the overlap floor already makes. The
+# verdict was never the defect. The evidence was.
+_newer_ev = classify_truncation(_SUBJECT_PLUS_NEWER, _REAL_AUTH)[2]
+check("truncation / and the out-of-range session is named, not folded into "
+      "the count",
+      (classify_truncation(_SUBJECT_PLUS_NEWER, _REAL_AUTH)[0],
+       "2026-09-17" in _newer_ev and "were not compared" in _newer_ev,
+       _newer_ev),
+      PASS, True, "quiet")
+
+# The older twin, which had no case at all. A subject session dated before
+# the authority's earliest is the common shape, since the authority is
+# fetched over an explicit range while a subject may hold more history.
+_SUBJECT_PLUS_OLDER = ([{"Date": "2026-09-09", "Close": 240.00}]
+                       + _SUBJECT_PLUS_NEWER[:-1])
+_older_ev = classify_truncation(_SUBJECT_PLUS_OLDER, _REAL_AUTH)[2]
+check("truncation / a session before the authority's earliest is named the "
+      "same way",
+      (classify_truncation(_SUBJECT_PLUS_OLDER, _REAL_AUTH)[0],
+       "2026-09-09" in _older_ev and "were not compared" in _older_ev,
+       _older_ev),
+      PASS, True, "quiet")
+
+# A first draft of this section also pinned "a session exactly on the
+# authority's boundary is not an extra", with a comment claiming an off-by-one
+# in the `min(ad) < d < max(ad)` bound would miss a fabrication or accuse a
+# real session. Mutation testing killed it: widening that bound to <= changes
+# nothing and the case still passed. The extras are computed from `sd - ad`,
+# so a date the authority carries is already excluded before the bound is
+# consulted, and the bound's strictness is unreachable. The case could not
+# fail, and its justification was wrong.
+#
+# It is recorded here rather than silently deleted because it was written an
+# hour after removing a tautological assertion from the parent_refs fixture
+# for exactly the same reason, which is the more useful fact: a case that
+# cannot fail is not caught by reading it, only by trying to break the code
+# under it.
+#
+# What DOES need pinning is the split itself, that inside is a fault and
+# outside is not, and both halves are already covered above.
+
 # ==================================================== 7. stale_value freshness
 stale = [bar("2026-06-01", 1, 2, 0.5, 1.5)]
 check("freshness / two-month-old final bar served as current",
