@@ -612,6 +612,49 @@ check("range fidelity / an authority range of zero is undefined, not a pass",
       classify_range_fidelity(CLEAN_BARS, _zero_range_auth, TOL),
       INDETERMINATE, None, "quiet")
 
+# A PARTIALLY zeroed authority, which is the dangerous one and was not
+# covered. The all-zero cases above fired because `compared` reached zero and
+# a guard caught it. With one zeroed session among four good ones, `compared`
+# is 3, the guard never fires, and the zeroed session was skipped in silence:
+# whatever the subject claimed there was never looked at. Measured before the
+# fix: a $5000 close and a fabricated Open/High/Low against a $240 series
+# reached PASS on both probes and PERMIT through decide(), while the evidence
+# string read "worst deviation 0.00000% within tolerance" and, on the range
+# probe, counted the session it had just skipped. That is an evidence string
+# overstating its own coverage, which is the defect this whole suite exists to
+# name, sitting inside the suite.
+#
+# 0.0 is a real float, so _numeric admits it and authority_bars' `is not None`
+# filter passes it through from live data. It is reachable, not theoretical.
+_one_zero_auth = [dict(b) for b in CLEAN_AUTH]
+_one_zero_auth[2] = dict(_one_zero_auth[2], close=0.0)
+_fabricated = [dict(b) for b in CLEAN_BARS]
+_fabricated[2] = dict(_fabricated[2], Close=5000.0)
+check("fidelity / one zeroed authority session is not a free pass for the "
+      "subject's value on it",
+      classify_fidelity(_fabricated, _one_zero_auth, TOL),
+      INDETERMINATE, None, "detect")
+
+_one_zero_range = [dict(b) for b in RANGE_AUTH]
+_one_zero_range[2] = dict(_one_zero_range[2], open=0.0, high=0.0, low=0.0)
+_fab_range = [dict(b) for b in CLEAN_BARS]
+_fab_range[2] = dict(_fab_range[2], Open=4990.0, High=5010.0, Low=4980.0)
+check("range fidelity / one zeroed authority session is not a free pass for "
+      "the subject's range on it",
+      classify_range_fidelity(_fab_range, _one_zero_range, TOL),
+      INDETERMINATE, None, "detect")
+
+# And the skip must not be silent even when the subject is faithful there.
+# A reader is entitled to know the comparison was thinner than the session
+# count suggests.
+_faithful_over_zero = classify_range_fidelity(CLEAN_BARS, _one_zero_range, TOL)
+check("range fidelity / a zeroed authority field is named in the evidence, "
+      "not quietly dropped from the count",
+      (_faithful_over_zero[0],
+       "printed zero" in str(_faithful_over_zero[2]),
+       _faithful_over_zero[2]),
+      INDETERMINATE, True, "quiet")
+
 # ============================ 4b. a padded argument is not an unhonorable one
 # P11 sent period='1mo ' and judged the answer with classify_invalid_argument,
 # whose contract is that the presence of data is itself the evidence. That

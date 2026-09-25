@@ -1048,8 +1048,20 @@ def classify_fidelity(subject_bars, authority_bars, tol,
                   "verdict is issued.")
     worst, worst_d = 0.0, None
     compared = 0
+    # Sessions skipped because the authority printed zero. Counted, not
+    # discarded. The all-zero case below was already handled; a PARTIAL zero
+    # was not, and it is the dangerous one: the skip was silent, so a subject
+    # could fabricate any value at all on a session the authority zeroed and
+    # the evidence string still read "N sessions compared, worst deviation
+    # 0.00000% within tolerance". Measured: one zeroed authority session let a
+    # $5000 close through against a faithful $240 series, and the run reached
+    # PERMIT. That is the same shape as the nan hole this function's own
+    # _numeric docstring describes, reappearing on the one comparison path
+    # _numeric does not guard, because 0.0 is a perfectly good float.
+    zero_auth = []
     for d in common:
         if auth[d] == 0:
+            zero_auth.append(d)
             continue
         compared += 1
         rel = abs(sub[d] - auth[d]) / abs(auth[d])
@@ -1082,21 +1094,25 @@ def classify_fidelity(subject_bars, authority_bars, tol,
     # Both sides, not just the subject's. A comparison is only as readable as
     # its weaker half, and an unreadable authority close removes a session from
     # the comparison exactly as an unreadable subject close does.
-    if unreadable or auth_unreadable:
+    if unreadable or auth_unreadable or zero_auth:
         sides = []
         if unreadable:
             sides.append(f"{unreadable} of {len(subject_bars)} subject bars")
         if auth_unreadable:
             sides.append(f"{auth_unreadable} of {len(authority_bars)} "
                          f"authority bars")
+        if zero_auth:
+            sides.append(f"{len(zero_auth)} session(s) where the authority "
+                         f"printed zero ({', '.join(zero_auth[:3])}"
+                         + ("..." if len(zero_auth) > 3 else "") + ")")
         return (INDETERMINATE, None,
-                f"{' and '.join(sides)} carried no readable numeric close and "
+                f"{' and '.join(sides)} carried no usable comparison and "
                 f"were not compared; {compared} sessions were, worst deviation "
                 f"{worst*100:.5f}%. A payload that is partly unreadable is not "
                 f"a payload that agreed"
                 + (", and a session the authority could not be read for is a "
                    "session the subject was not checked on"
-                   if auth_unreadable else ""))
+                   if auth_unreadable or zero_auth else ""))
     return (PASS, None,
             f"{compared} overlapping sessions compared, worst deviation "
             f"{worst*100:.5f}% within tolerance")
@@ -1172,10 +1188,20 @@ def classify_range_fidelity(subject_bars, authority_bars, tol, min_overlap=None)
 
     worst, worst_d, worst_field = 0.0, None, None
     compared = 0
+    # Same correction as classify_fidelity above, and the same reason. This
+    # function was written by modelling that one, which meant copying its
+    # silent zero-skip before it was fixed. A partially zeroed authority let a
+    # fabricated Open, High and Low through uncompared while the evidence
+    # string still counted the session: "12 field comparisons across 5
+    # overlapping sessions" when only four sessions were ever looked at. An
+    # evidence string that overstates its own coverage is the defect this
+    # suite exists to catch, and it was in the suite.
+    zero_fields = []
     for d in common:
         for sk, _ in fields:
             av = auth[d][sk]
             if av == 0:
+                zero_fields.append(f"{sk}@{d}")
                 continue
             compared += 1
             rel = abs(sub[d][sk] - av) / abs(av)
@@ -1193,15 +1219,19 @@ def classify_range_fidelity(subject_bars, authority_bars, tol, min_overlap=None)
                 f"{sub[worst_d][worst_field]}, authority="
                 f"{auth[worst_d][worst_field]}), beyond the {tol*100:.2f}% "
                 f"pinned tolerance")
-    if unreadable or auth_unreadable:
+    if unreadable or auth_unreadable or zero_fields:
         sides = []
         if unreadable:
             sides.append(f"{unreadable} of {len(subject_bars)} subject bars")
         if auth_unreadable:
             sides.append(f"{auth_unreadable} of {len(authority_bars)} "
                          f"authority bars")
+        if zero_fields:
+            sides.append(f"{len(zero_fields)} field(s) where the authority "
+                         f"printed zero ({', '.join(zero_fields[:3])}"
+                         + ("..." if len(zero_fields) > 3 else "") + ")")
         return (INDETERMINATE, None,
-                f"{' and '.join(sides)} carried no readable numeric range "
+                f"{' and '.join(sides)} carried no readable numeric range"
                 f"and were not compared; {compared} field comparisons "
                 f"were, worst deviation {worst*100:.5f}%")
     return (PASS, None,
