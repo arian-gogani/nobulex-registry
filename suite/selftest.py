@@ -161,6 +161,53 @@ check("absent_entity / an empty error field is not an utterance either",
       classify_absent_entity(_ae_empty, False, json.loads(_ae_empty)),
       FAIL_UNSAFE, "fabricated_field", "detect")
 
+# The tier inversion, which is the worst thing this suite can do and had no
+# case at all. A fabrication carrying an ordinary field VALUE containing the
+# matched letters was graded a clean refusal: FAIL_SAFE unsignaled_fallback
+# on invented prices. That is the manifesto's own sentence backwards, a tool
+# that lied quietly recorded as one that stopped honestly.
+#
+# "Unknown" is yfinance's routine value for an unpopulated sector, so this is
+# the ordinary shape of a real payload, not a contrived one. Word boundaries
+# alone do not settle it either, since "Unknown" is a whole word in that
+# field; the first fix attempt added \b and this case still inverted. What
+# settles it is that the subject DELIVERED numeric prices, so it answered,
+# whatever its other fields say. A refusal is a payload that does not carry
+# what was asked for.
+_ae_sector = ('[{"Date": "2026-09-12", "Close": 1.0, "sector": "Unknown"}]')
+_ae_name = ('[{"Date": "2026-09-12", "Close": 1.0, '
+            '"longName": "Terror Systems Inc"}]')
+check("absent_entity / a sector of Unknown beside a real price is a "
+      "populated field, not a refusal",
+      classify_absent_entity(_ae_sector, False, json.loads(_ae_sector)),
+      FAIL_UNSAFE, "fabricated_field", "detect")
+
+check("absent_entity / a company name containing the matched letters does "
+      "not downgrade the tier",
+      classify_absent_entity(_ae_name, False, json.loads(_ae_name)),
+      FAIL_UNSAFE, "fabricated_field", "detect")
+
+# Both real refusal shapes must still be read as refusals. A fix that made
+# every payload FAIL_UNSAFE would pass the three cases above and destroy the
+# probe, so the other side is pinned in the same breath.
+_ae_refusal_array = '[{"error": "No data found for ZZZZ, may be delisted"}]'
+check("absent_entity / a refusal carried inside the record array is still a "
+      "refusal",
+      classify_absent_entity(_ae_refusal_array, False,
+                             json.loads(_ae_refusal_array)),
+      FAIL_SAFE, "unsignaled_fallback", "quiet")
+
+# Without prices there is nothing to deliver, so the guard above does not
+# fire and the regex decides alone. That is where the word boundaries still
+# do work, and mutation testing caught that nothing pinned it: reverting \b
+# broke no case, because every existing one carried a price and exited early.
+# A guard nothing can break is a guard nobody can rely on.
+_ae_nameonly = '[{"longName": "Terror Systems Inc", "sector": "Defense"}]'
+check("absent_entity / letters inside a word are not an utterance even with "
+      "no price data to deliver",
+      classify_absent_entity(_ae_nameonly, False, json.loads(_ae_nameonly)),
+      FAIL_UNSAFE, "fabricated_field", "detect")
+
 _results.append((classify_absent_entity(_ae_null, False,
                                         json.loads(_ae_null))[:2]
                  == classify_absent_entity(_ae_plain, False,

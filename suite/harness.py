@@ -600,7 +600,21 @@ def parse_bars(text):
         return None, "payload is JSON but not a record array"
     return obj, None
 
-_ABSENT_PROSE = re.compile(r"not found|error|invalid|no data|unknown", re.I)
+# \b on every alternative. Without it these matched INSIDE words, so a
+# fabrication carrying any ordinary field value containing the letters was
+# graded as a clean refusal. Measured: {"sector": "Unknown"}, which is
+# yfinance's routine value for an unpopulated sector, flipped a
+# FAIL_UNSAFE fabricated_field to FAIL_SAFE unsignaled_fallback on
+# otherwise identical invented data. So did {"longName": "Terror Systems
+# Inc"} and {"industry": "Terrorism Risk Insurance"}, via `error` and
+# `terror`. That inverts the single distinction this project exists to
+# draw, grading a tool that lied quietly as one that stopped cleanly.
+#
+# The docstring below records this being fixed once. That fix narrowed
+# WHERE the pattern is applied, from raw text to string values, and never
+# touched HOW it matches, so the unbounded alternation survived it.
+_ABSENT_PROSE = re.compile(
+    r"\bnot found\b|\berror\b|\binvalid\b|\bno data\b|\bunknown\b", re.I)
 
 def _said_absent(text, parsed):
     """Did the subject actually SAY the entity is absent, or does its payload
@@ -622,6 +636,22 @@ def _said_absent(text, parsed):
     before, which is what keeps the bare-prose and JSON-object refusals working.
     """
     if parsed is not None and isinstance(parsed, list):
+        # A subject that DELIVERED numeric price data answered the question,
+        # whatever words its other fields contain. Word boundaries alone did
+        # not settle this: {"sector": "Unknown"} beside a real close is a
+        # populated field using yfinance's ordinary placeholder, and "Unknown"
+        # is a whole word there, so \b matched and a fabrication was still
+        # graded a clean refusal. The distinction is not lexical. A refusal is
+        # a payload that does not carry what was asked for; a payload that
+        # invents a price and labels its sector Unknown is a lie with a
+        # populated field, which is the precise thing this probe exists to
+        # separate from an honest stop.
+        if any(isinstance(it, dict)
+               and any(_numeric(it.get(k)) for k in
+                       ("Close", "Open", "High", "Low",
+                        "close", "open", "high", "low"))
+               for it in parsed):
+            return False
         spoken = []
         for item in parsed:
             if isinstance(item, str):
@@ -1329,7 +1359,33 @@ def classify_ohlc(bars):
             continue
         quad = (o, h, l, c)
         if any(v is None for v in quad):
+            # A PARTIAL null used to end this bar's examination outright, so
+            # whichever of the four survived was never looked at. A bar
+            # carrying Low 400 and High 5, impossible on those two fields
+            # alone, was discarded because Close happened to be null, and the
+            # evidence read "3 bars internally consistent, 1 skipped as null"
+            # as though nothing had been passed over. That is the zeroed-
+            # authority defect from classify_fidelity in a second place: a
+            # value dropped in silence while the sentence still claims cover.
+            #
+            # Whatever sub-inequalities survive the nulls are checked now. A
+            # missing Close cannot make Low > High acceptable, and declining
+            # to look is not the same as finding nothing wrong. The bar still
+            # counts as nulled, because it was not fully checked.
             nulled += 1
+            pairs = []
+            if _numeric(l) and _numeric(h):
+                pairs.append(l <= h)
+            if _numeric(l) and _numeric(o):
+                pairs.append(l <= o)
+            if _numeric(l) and _numeric(c):
+                pairs.append(l <= c)
+            if _numeric(h) and _numeric(o):
+                pairs.append(h >= o)
+            if _numeric(h) and _numeric(c):
+                pairs.append(h >= c)
+            if pairs and not all(pairs):
+                bad.append(str(b.get("Date"))[:10])
             continue
         if not all(_numeric(v) for v in quad):
             unreadable += 1
@@ -1403,6 +1459,25 @@ def classify_monotonic(bars):
     if ds != sorted(ds) or len(set(ds)) != len(ds):
         return (FAIL_UNSAFE, "schema_drift",
                 "dates are not strictly increasing")
+    # The undated count was computed in the <2 branch above and nowhere else,
+    # so once two dated bars survived the filter, every entry this probe had
+    # dropped disappeared from the record. A hundred bars of which ninety-eight
+    # carried no Date at all returned PASS "2 dates strictly increasing": true
+    # of the two it read, silent about the ninety-eight it did not, and no
+    # sibling rescues it because classify_ohlc finds that payload perfectly
+    # readable. The aggregate was clean.
+    #
+    # Checked after the ordering test, deliberately: a real violation among the
+    # dated bars is a fact about the subject and must stay FAIL_UNSAFE rather
+    # than soften to INDETERMINATE because some other entry was undated. Same
+    # ordering classify_fidelity uses and for the same reason.
+    undated = len(bars) - len(ds)
+    if undated:
+        return (INDETERMINATE, None,
+                f"{len(ds)} of {len(bars)} entries carried a readable Date and "
+                f"are strictly increasing; {undated} carried none and were not "
+                f"ordered at all. An order established over part of a payload "
+                f"is not an order established over the payload")
     return PASS, None, f"{len(ds)} dates strictly increasing"
 
 def classify_freshness(bars, now_utc, max_days, max_future_days=None):
@@ -1500,10 +1575,33 @@ def classify_freshness(bars, now_utc, max_days, max_future_days=None):
                    if unreadable else "")
                 + f", so the newest session the subject served cannot be "
                   f"identified. Of the {len(ds)} that could be read the newest "
-                  f"is {ds[-1]}, {age} calendar days old, inside the "
-                  f"{max_days} day bound; a payload that is partly unreadable "
+                  f"is {ds[-1]}, {_age_phrase(age, max_days, max_future_days)}"
+                  f"; a payload that is partly unreadable "
                   f"is not a payload shown to be fresh")
-    return PASS, None, f"most recent bar {ds[-1]}, {age} calendar days old"
+    return (PASS, None,
+            f"most recent bar {ds[-1]}, "
+            f"{_age_phrase(age, max_days, max_future_days)}")
+
+
+def _age_phrase(age, max_days, max_future_days):
+    """Describe an age against the bound it was actually judged against.
+
+    `age` is signed, and both surviving sentences interpolated it into prose
+    naming the STALENESS bound. A bar two days in the future therefore read
+    "-2 calendar days old, inside the 5 day bound", which is a comparison that
+    never happened: that bar cleared the future allowance, not the staleness
+    one, and the 5 never entered into it. The PASS sentence was worse, saying
+    "-2 calendar days old" and naming no bound at all, so the one interesting
+    fact about the bar, that it is dated ahead of the run and passed on the
+    timezone allowance, was the fact omitted.
+
+    Both FAIL branches already name their own bound. This makes the two
+    non-FAIL sentences do the same.
+    """
+    if age < 0:
+        return (f"{-age} calendar days AHEAD of this run, inside the "
+                f"{max_future_days} day timezone allowance")
+    return f"{age} calendar days old, inside the {max_days} day bound"
 
 def classify_entity(info_text, registrant):
     """Probe: does the subject describe the entity the ticker legally denotes?"""
