@@ -11,8 +11,9 @@ place, rather than merely rejected at verification. Published as actual
 signed objects so the cap-exceeded case is a real rejected artifact and not
 documented behaviour.
 
-Writes to examples/parent_refs/vectors/ and verifies every artifact it
-writes before exiting. Exits nonzero if any expectation fails.
+Writes to examples/parent_refs/vectors/ after checking each generated
+receipt. Vector 06 is also read back and checked after writing. Exits
+nonzero if any expectation fails.
 
 WHAT IS AND IS NOT RFC 8785 HERE, STATED RATHER THAN IMPLIED
 
@@ -286,6 +287,63 @@ def verify(obj, key, embedded_key_is_untrusted=True):
     return True, "ok"
 
 
+def reconstruct_three_record_fixture(receipts, start_ref, key,
+                                     supports_fan_in):
+    """Walk this finite fixture, reporting a skipped branch as INCOMPLETE.
+
+    This is a conformance example over three supplied, signed records. It is
+    not a general graph verifier or a proposal for production traversal
+    budgets; the AST09 review has not chosen those bounds. In particular,
+    this function never fetches records from a network or trusts a key from
+    a receipt. It only demonstrates the declared-limitation property.
+    """
+    if len(receipts) != 3:
+        return {"status": "REFUSED", "reason": "fixture_requires_three_records"}
+    by_ref = {r.get("action_ref"): r for r in receipts}
+    if len(by_ref) != 3:
+        return {"status": "REFUSED", "reason": "duplicate_action_ref"}
+
+    visited, roots, omitted = [], [], []
+    pending = [start_ref]
+    while pending:
+        ref = pending.pop()
+        if ref in visited:
+            return {"status": "REFUSED", "reason": "cycle_or_repeat"}
+        obj = by_ref.get(ref)
+        if obj is None:
+            return {"status": "REFUSED", "reason": "missing_parent"}
+        ok, why = verify(obj, key)
+        if not ok:
+            return {"status": "REFUSED", "reason": why}
+        visited.append(ref)
+        parents = obj["parent_refs"]
+        if not supports_fan_in and len(parents) > 1:
+            omitted.extend(parents[1:])
+            parents = parents[:1]
+        if not parents:
+            roots.append(ref)
+        pending.extend(reversed(parents))
+
+    return {
+        "status": "INCOMPLETE" if omitted else "COMPLETE",
+        "reason": "fan_in_unsupported" if omitted else "all_branches_reached_root",
+        "visited_action_refs": visited,
+        "root_action_refs": sorted(roots),
+        "omitted_parent_refs": omitted,
+        "all_branches_reached_root": not omitted,
+    }
+
+
+def completeness_claim_matches_fixture(report, complete_report):
+    """Reject a claim of completeness that visited only one join branch."""
+    if report.get("status") != "COMPLETE":
+        return True
+    return (report.get("all_branches_reached_root") is True
+            and report.get("omitted_parent_refs") == []
+            and report.get("visited_action_refs")
+            == complete_report.get("visited_action_refs"))
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     sign, key = _signer()
@@ -465,6 +523,60 @@ def main():
         check(f"{name} verifies", (ok, why), (True, "ok"))
         (OUT / name).write_text(json.dumps(r, indent=2) + "\n")
 
+    print("\nA single-parent-only walk must report an incomplete join\n")
+    root_a_ref = "sha256:" + "a1" * 32
+    root_b_ref = "sha256:" + "b2" * 32
+    join_ref = "sha256:" + "c3" * 32
+    graph = [
+        build_receipt(root_a_ref, [], sign),
+        build_receipt(root_b_ref, [], sign),
+        build_receipt(join_ref, [root_b_ref, root_a_ref], sign),
+    ]
+    for i, r in enumerate(graph):
+        check(f"join record {i} verifies", verify(r, key), (True, "ok"))
+    full = reconstruct_three_record_fixture(graph, join_ref, key, True)
+    limited = reconstruct_three_record_fixture(graph, join_ref, key, False)
+    check("fan-in-aware walk reaches both roots",
+          (full["status"], full["root_action_refs"]),
+          ("COMPLETE", [root_a_ref, root_b_ref]))
+    check("single-parent-only walk reports incomplete",
+          (limited["status"], limited["reason"],
+           limited["all_branches_reached_root"]),
+          ("INCOMPLETE", "fan_in_unsupported", False))
+    check("single-parent-only walk names the omitted branch",
+          limited["omitted_parent_refs"], [root_b_ref])
+    false_complete = dict(limited, status="COMPLETE",
+                          all_branches_reached_root=True,
+                          omitted_parent_refs=[])
+    check("claiming that partial walk was complete is refused",
+          completeness_claim_matches_fixture(false_complete, full), False)
+    fixture06 = {
+        "fixture_version": "parent-refs-incomplete-1",
+        "purpose": "A verifier limited to one parent cannot report complete causal "
+                   "reconstruction for a two-parent join.",
+        "scope": "Three supplied signed records only; not a general DAG "
+                 "verifier, an action_ref derivation test, or a traversal "
+                 "resource-bound test.",
+        "key_trust": "The fixture key is a test key. Supply it to a verifier "
+                     "out of band; do not accept a receipt's embedded key "
+                     "as its own authority.",
+        "start_action_ref": join_ref,
+        "receipts": graph,
+        "expected_fan_in_aware": full,
+        "expected_single_parent_only": limited,
+    }
+    (OUT / "06-fan-in-unsupported.INCOMPLETE.json").write_text(
+        json.dumps(fixture06, indent=2) + "\n")
+    saved06 = json.loads((OUT / "06-fan-in-unsupported.INCOMPLETE.json").read_text())
+    check("written join receipts verify from disk",
+          [verify(r, key) for r in saved06["receipts"]],
+          [(True, "ok")] * 3)
+    check("written limited result stays incomplete",
+          reconstruct_three_record_fixture(saved06["receipts"],
+                                           saved06["start_action_ref"],
+                                           key, False),
+          saved06["expected_single_parent_only"])
+
     # Determinism: the same inputs in a different order must produce the same
     # bytes, or the fixture is not a fixture.
     a = build_receipt("sha256:x", ["sha256:b", "sha256:a"], sign)
@@ -512,7 +624,7 @@ def main():
         for f in failures:
             print("  " + f)
         return 1
-    print("every artifact written was verified after writing.")
+    print("checks passed; vector 06 was read and verified after writing.")
     return 0
 
 
