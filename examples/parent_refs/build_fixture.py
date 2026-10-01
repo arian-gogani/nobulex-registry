@@ -3,13 +3,11 @@
 
     python3 examples/parent_refs/build_fixture.py
 
-Promised in OWASP/www-project-agentic-skills-top-10#44 on 10 Sept 2026:
-implement `parent_refs` as a canonicalized array, sorted ascending as UTF-8
-byte strings and deduplicated, with a 64-parent fan-in cap enforced at
-CONSTRUCTION time so a receipt exceeding it is never signed in the first
-place, rather than merely rejected at verification. Published as actual
-signed objects so the cap-exceeded case is a real rejected artifact and not
-documented behaviour.
+The original proposal in OWASP/www-project-agentic-skills-top-10#44 put the
+fan-in cap at construction only. That was insufficient: an adversary can use
+another producer and sign an over-cap object. Vector 04 records a conforming
+producer's refusal; vector 05 is an independently valid signature on an
+over-cap object that the verifier rejects. Both checks are required.
 
 Writes to examples/parent_refs/vectors/ and verifies every artifact it
 writes before exiting. Exits nonzero if any expectation fails.
@@ -63,13 +61,10 @@ MAX_PARENTS = 64
 
 
 class FanInCapExceeded(ValueError):
-    """Raised at construction. A receipt over the cap is never signed.
+    """Raised when this conforming constructor receives too many parents.
 
-    This is the whole point of the cap living here rather than in a
-    verifier. A verifier-side cap still lets an over-cap object exist as a
-    signed artifact that some other verifier, or an older one, may accept.
-    Refusing before the signature means the object a producer could hand
-    anyone was never valid to begin with.
+    This does not constrain another producer. The verifier independently
+    rejects signed over-cap objects, as vector 05 demonstrates.
     """
 
 
@@ -480,17 +475,16 @@ def main():
     check("reordering parent_refs after signing breaks verification", ok, False)
 
     rejected = {
-        "note": "There is deliberately no signed artifact for the over-cap "
-                "case. The cap is enforced at construction, so the object "
-                "below was refused before a signature existed. This file "
-                "records the refusal; it is not a receipt.",
+        "note": "This conforming constructor refused the over-cap object "
+                "before signing. This file is a refusal record, not a "
+                "receipt. An adversarial producer can still sign an over-cap "
+                "object; vector 05 contains one and the verifier rejects it.",
         "attempted_parent_count": len(over_cap),
         "cap": MAX_PARENTS,
         "error": "FanInCapExceeded",
-        "why_not_verifier_side": "A verifier-side cap still permits a signed "
-                                 "over-cap object to exist, which a different "
-                                 "or older verifier may accept. Refusing "
-                                 "before signing means it never existed.",
+        "scope": "conforming producer only",
+        "signed_adversarial_vector":
+            "05-fan-in-cap-exceeded.SIGNED-ADVERSARIAL.json",
     }
     (OUT / "04-fan-in-cap-exceeded.REFUSAL.json").write_text(
         json.dumps(rejected, indent=2) + "\n")

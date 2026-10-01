@@ -1,0 +1,65 @@
+{
+  "fixture_version": "parent-refs-coverage-1",
+  "head_ref": "sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+  "records": {
+    "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1": {
+      "receipt_version": "parent-refs-fixture-2",
+      "action_ref": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "parent_refs": [],
+      "signature": {
+        "status": "SIGNED",
+        "alg": "Ed25519",
+        "key_id": "fixture-1",
+        "public_key": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+        "sig": "cqcR3ijeBYZ6EbMMkpUBEdf625thn0S3bZveQ4AMX238QP0ckf5FbIjbJEdzdJHXLbaMOgK13PiwRFbauiObBg=="
+      },
+      "preimage_sha256": "sha256:e363da222517e99247f4129eb7304bb2f661680320fd2bc0d4cc47692fd0aafa"
+    },
+    "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2": {
+      "receipt_version": "parent-refs-fixture-2",
+      "action_ref": "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "parent_refs": [],
+      "signature": {
+        "status": "SIGNED",
+        "alg": "Ed25519",
+        "key_id": "fixture-1",
+        "public_key": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+        "sig": "T3NvMvLMe2yuVTr2eJ6_gzdfWRTZsjg-zkKu19xmu1HxidbDgA7Kmb1dqX2iEtsXnLENwdJt7Nl_kCaGYLKzDg=="
+      },
+      "preimage_sha256": "sha256:2a2f4a182f77a81b38dcba61720e03a722cc57225981c6edfd8800864c485b66"
+    },
+    "sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3": {
+      "receipt_version": "parent-refs-fixture-2",
+      "action_ref": "sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+      "parent_refs": [
+        "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+      ],
+      "signature": {
+        "status": "SIGNED",
+        "alg": "Ed25519",
+        "key_id": "fixture-1",
+        "public_key": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+        "sig": "LfhuieuCfpaj3oeG5R4lurRYn-vbb4dbqzyRyunTCvY-hDWeHkC6gkl1SrDT9N7GX2HaTn6m-PM9qLtke8tWBA=="
+      },
+      "preimage_sha256": "sha256:7cab81f4c702c2123ddb60fc09c48687826b2a9673b33c3863bca285fb64bfd4"
+    }
+  },
+  "expected": {
+    "fan_in_verifier": {
+      "status": "COMPLETE",
+      "reason": "all_branches_to_roots",
+      "roots": [
+        "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+      ],
+      "visited": 3
+    },
+    "single_parent_only_verifier": {
+      "status": "INCOMPLETE",
+      "reason": "fan_in_unsupported",
+      "visited": 0
+    }
+  },
+  "claim_limit": "Complete means every parent named by the supplied signed records reached a root. It does not prove that no other real-world action occurred."
+}
