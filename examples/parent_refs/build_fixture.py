@@ -480,18 +480,24 @@ def main():
     check("reordering parent_refs after signing breaks verification", ok, False)
 
     rejected = {
-        "note": "There is deliberately no signed artifact for the over-cap "
-                "case. The cap is enforced at construction, so the object "
-                "below was refused before a signature existed. This file "
-                "records the refusal; it is not a receipt.",
+        "note": "This conforming producer refused the 65-parent input before "
+                "signing. This file records that producer's refusal; it is "
+                "not a receipt. An adversarial producer signed an over-cap "
+                "record in 05-fan-in-cap-exceeded.SIGNED-ADVERSARIAL.json, "
+                "which the verifier rejects.",
         "attempted_parent_count": len(over_cap),
         "cap": MAX_PARENTS,
         "error": "FanInCapExceeded",
-        "why_not_verifier_side": "A verifier-side cap still permits a signed "
-                                 "over-cap object to exist, which a different "
-                                 "or older verifier may accept. Refusing "
-                                 "before signing means it never existed.",
+        "scope_of_refusal": "A constructor-side cap constrains only producers "
+                            "using that constructor. It cannot prevent an "
+                            "independent producer from signing an over-cap "
+                            "record, so every verifier needs its own cap.",
     }
+    check("refusal note names the signed adversarial counterexample",
+          "05-fan-in-cap-exceeded.SIGNED-ADVERSARIAL.json" in json.dumps(rejected),
+          True)
+    check("refusal note does not claim universal non-existence",
+          "never existed" in json.dumps(rejected), False)
     (OUT / "04-fan-in-cap-exceeded.REFUSAL.json").write_text(
         json.dumps(rejected, indent=2) + "\n")
     print(f"  ok    refusal record written, and it is not a receipt")
