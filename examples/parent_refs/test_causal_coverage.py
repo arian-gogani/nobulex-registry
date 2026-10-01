@@ -70,6 +70,20 @@ class CausalCoverageTest(unittest.TestCase):
         self.assertEqual(result["status"], "REFUSED")
         self.assertEqual(result["reason"], "cycle")
 
+    def test_changed_signed_parentage_is_refused(self):
+        records = json.loads(json.dumps(self.records))
+        records[self.join]["parent_refs"] = [self.left]
+        result = reconstruct(records, self.join, self.key)
+        self.assertEqual(result["status"], "REFUSED")
+        self.assertIn("preimage_sha256", result["reason"])
+
+    def test_bad_signature_is_refused(self):
+        records = json.loads(json.dumps(self.records))
+        records[self.join]["signature"]["sig"] = "AA=="
+        result = reconstruct(records, self.join, self.key)
+        self.assertEqual(result["status"], "REFUSED")
+        self.assertIn("signature does not verify", result["reason"])
+
     def test_published_fixture_is_current(self):
         self.assertEqual(json.loads(OUT.read_text()), make_vector())
 
