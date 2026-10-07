@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -118,7 +119,14 @@ def validate_policy(policy) -> None:
         if field not in policy:
             raise PolicyError(f"policy is missing required field {field!r}")
 
+    allowed = {"id", "version", "on_evidence", "on_limit_violation", "limits"}
+    if set(policy) - allowed:
+        raise PolicyError("policy has unknown fields: " + repr(sorted(set(policy) - allowed)))
+    if not isinstance(policy.get("limits", []), list):
+        raise PolicyError("limits must be a list (use [] for no limits)")
     on_ev = policy["on_evidence"]
+    if not isinstance(on_ev, dict):
+        raise PolicyError("on_evidence must be an object")
     for status in (EV_PASS, EV_FAIL, EV_INDETERMINATE):
         if status not in on_ev:
             raise PolicyError(
@@ -140,6 +148,8 @@ def validate_policy(policy) -> None:
             f"{policy['on_limit_violation']!r}")
 
     for i, rule in enumerate(policy.get("limits", [])):
+        if not isinstance(rule, dict):
+            raise PolicyError(f"limit {i} must be an object")
         if set(rule) - {"field", "op", "value", "code"}:
             raise PolicyError(f"limit {i} has unknown keys")
         for field in ("field", "op", "value", "code"):
@@ -149,6 +159,25 @@ def validate_policy(policy) -> None:
             raise PolicyError(
                 f"limit {i} uses operator {rule['op']!r}, which is not in the "
                 f"bounded set {sorted(_OPS)}")
+        # The operand's type has to suit the operator, or the operator quietly
+        # becomes a different operator. `in` against a string is a SUBSTRING
+        # test, so the plausible authoring slip of writing a list as
+        # "AAPL,MSFT" turned an allowlist into one that admits "A", "PL,M" and
+        # every other substring, and the reason object still reported
+        # status SATISFIED with op "in" beside it. JSON gives no hint that the
+        # value is the wrong shape, which is precisely why this validator
+        # exists rather than trusting the author.
+        if rule["op"] == "in" and not isinstance(rule["value"], (list, tuple)):
+            raise PolicyError(
+                f"limit {i} uses op 'in' with a {type(rule['value']).__name__} "
+                "operand. Membership needs an array; a string operand is a "
+                "substring test, which is a different and weaker check")
+        if rule["op"] in ("lte", "lt", "gte", "gt") and not _comparable(
+                rule["value"]):
+            raise PolicyError(
+                f"limit {i} compares with op {rule['op']!r} against "
+                f"{rule['value']!r}, which is not a finite number. An ordering "
+                "limit whose bound is not a number cannot refuse anything")
 
 
 def _lookup(context, dotted):
@@ -161,12 +190,41 @@ def _lookup(context, dotted):
     return node, True
 
 
+def _comparable(v):
+    """A value an ordering limit can actually order. bool and nan are not.
+
+    bool subclasses int, so True <= 50000 is True and a notional of `true`
+    satisfied a $50,000 cap while the reason object recorded observed: true and
+    status SATISFIED. nan is worse in the other direction: every comparison
+    against it is False, so `observed <= limit` fails and the limit refuses,
+    which is safe, but `limit >= observed` in a gte rule passes vacuously.
+    Neither is a quantity, and the harness's own _numeric excludes both for
+    exactly this reason. This is the same rule on the policy side, which did
+    not have it.
+    """
+    return (isinstance(v, (int, float)) and not isinstance(v, bool)
+            and math.isfinite(v))
+
+
 def evaluate_limits(policy, context):
     """Return (satisfied, reasons). A missing field never silently passes."""
     reasons = []
     satisfied = True
     for rule in policy.get("limits", []):
         observed, present = _lookup(context, rule["field"])
+        if present and rule["op"] in ("lte", "lt", "gte", "gt") \
+                and not _comparable(observed):
+            # UNEVALUATED, not a violation. The value is not a quantity, so the
+            # limit did not refuse it and did not clear it either, and
+            # unevaluated_limits > 0 already blocks PERMIT.
+            satisfied = False
+            reasons.append({
+                "code": rule["code"],
+                "status": "UNEVALUATED",
+                "detail": f"{rule['field']}={observed!r} is not a finite "
+                          "number, so an ordering limit cannot judge it",
+            })
+            continue
         if not present:
             satisfied = False
             reasons.append({

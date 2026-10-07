@@ -716,11 +716,38 @@ def cmd_verify(quiet=False):
             "  the commit that updates the manifest, because the diff is the\n"
             "  only thing a stranger will have to judge it by.\n"
             % "\n  ".join(altered))
+    if missing and not have and want:
+        # EVERY committed record absent is the export repository's correct
+        # state, not an integrity failure. Run here, --verify used to print
+        # "A held record cannot be withdrawn by deleting the file" over all
+        # seven files, followed by byte-level disagreements computed against
+        # history that was deliberately purged, on a repository where
+        # --verify-export exits 0 and reports "none present, register agrees".
+        #
+        # A tool whose job is raising true alarms cannot afford a confident
+        # false one: the reader who sees this cannot tell it from the real
+        # thing, and the next time it fires for real they will have learned to
+        # discount it. Partial absence below is still an alarm, because some
+        # records present and some gone is neither repository's correct state.
+        sys.stderr.write(
+            "WRONG COMMAND FOR THIS REPOSITORY, probably.\n"
+            "  The manifest commits to %d held record(s) and none of them is\n"
+            "  present. In the export repository that is correct and expected,\n"
+            "  and the check for it is:\n"
+            "      python3 suite/hold.py --verify-export\n"
+            "  --verify is for the tree where the records actually live, and\n"
+            "  it is refusing rather than guessing which tree this is. If the\n"
+            "  records DO belong here, they are all gone, which is the real\n"
+            "  emergency this message is declining to cry wolf about.\n"
+            % len(want))
+        return 2
     if missing:
         sys.stderr.write(
             "COMMITTED TO BUT NOT ON DISK:\n  %s\n"
             "  A held record cannot be withdrawn by deleting the file.\n"
-            % "\n  ".join(missing))
+            "  %d of %d committed record(s) are present, so this is not the\n"
+            "  export repository's all-absent state. Something removed these.\n"
+            % ("\n  ".join(missing), len(have & set(want)), len(want)))
     if uncommitted:
         sys.stderr.write(
             "HELD BUT NOT COMMITTED TO:\n  %s\n"
@@ -1346,6 +1373,17 @@ def _reply_obligation_unmet(rec):
     ror = pub.get("right_of_reply") or {}
     if not ror.get("required"):
         return None
+    # Asked before delivery, because delivery to an unnamed party is not a
+    # fact this record can hold. run.py leaves the recipient unset rather than
+    # guessing when the subject's origin is unreadable, and a record that never
+    # said who it owed the notice to cannot later claim to have sent it. This
+    # is the same refusal as the sentence below, one step earlier: silence from
+    # someone who was never identified is not silence either.
+    recipient = ror.get("recipient")
+    if not isinstance(recipient, str) or not recipient.strip():
+        return ("no recipient is named, so there is nobody this record can "
+                "have notified. Identify the subject's maintainer, record it "
+                "in right_of_reply.recipient, then deliver.")
     if not ror.get("artifact_delivered_at"):
         return ("the artifact was never delivered, so the window never "
                 "opened. Deliver it, record artifact_delivered_at and "

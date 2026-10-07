@@ -37,8 +37,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "suite"))
 
 from decide import (  # noqa: E402
     BLOCK, ESCALATE, EV_INDETERMINATE, MODE_ENFORCE, MODE_OBSERVE, PERMIT,
-    PolicyError, decide, ed25519_signer, receipt, sha256, validate_policy,
-    verify_receipt,
+    PolicyError, _canonical, decide, ed25519_signer, receipt, sha256,
+    validate_policy, verify_receipt,
 )
 from harness import (  # noqa: E402
     AuthorityUnavailable, FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE,
@@ -132,9 +132,35 @@ class Gateway:
         # already serialized on this same lock to mint its receipt, because
         # the hash chain is sequential by construction.
         key = body.get("idempotency_key")
+        # The key is bound to the request it was first used for. It was not:
+        # _seen mapped a key straight to a response and returned it without
+        # comparing anything, so reusing a key with a different action replayed
+        # the first action's verdict. A $100 order established a PERMIT and a
+        # $999,999,999 order with the same key inherited it, with reasons
+        # reporting observed: 100 and the receipt carrying the first action's
+        # hash. The September fix closed the race, where two identical requests
+        # both executed; this closes the collision, where one key spoke for two
+        # different requests. Replaying a decision is only honest when the thing
+        # decided is the same thing, and nothing checked that.
+        fingerprint = _canonical({
+            "action": body.get("action"),
+            "outcomes": body.get("outcomes") or [],
+            "context": body.get("context"),
+        })
         with self._lock:
             if key is not None and key in self._seen:
-                return self._seen[key]
+                prior_fp, prior_response = self._seen[key]
+                if prior_fp != fingerprint:
+                    # Refused, not decided. Answering at all would mean either
+                    # replaying a verdict for a different action or issuing a
+                    # second verdict under a key that already names one.
+                    raise BadRequest(
+                        "idempotency_key was already used for a different "
+                        "request. A key identifies one action, one evidence "
+                        "set and one context; reusing it for another is a "
+                        "caller bug, and replaying the earlier decision would "
+                        "approve something that was never evaluated.")
+                return prior_response
 
             action = body.get("action")
             if not isinstance(action, dict) or not action.get("type"):
@@ -176,7 +202,7 @@ class Gateway:
                 self.would_block += 1
             response = {**d, "receipt": r}
             if key is not None:
-                self._seen[key] = response
+                self._seen[key] = (fingerprint, response)
         return response
 
     def live_check_request(self, body):

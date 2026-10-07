@@ -951,12 +951,11 @@ check("truncation / a fifth of the window shared is still not a result",
       classify_truncation(_span("2026-02-10", 100), _AUTH100),
       INDETERMINATE, None, "detect")
 
-# must not fire: above the pinned floor the windows are the same window, and a
-# real truncation still has to be caught. A probe that resolves every
-# comparison to INDETERMINATE has stopped answering the question.
-check("truncation / a majority-shared window is judged, not abstained on",
+# Correction: this fixture used to require PASS despite missing authority
+# sessions. Sufficient overlap allows comparison; it does not prove coverage.
+check("truncation / majority overlap does not excuse missing sessions",
       classify_truncation(_span("2026-03-13", 100), _AUTH100),
-      PASS, None, "quiet")
+      FAIL_UNSAFE, "partial_truncation", "detect")
 
 check("truncation / a genuine short serve is still caught",
       classify_truncation(_span("2026-05-01", 30), _AUTH100),
@@ -3437,7 +3436,15 @@ def _gate(name, rid, pub, want_rc, kind, withdrawn=False):
                      "status=%r" % (pub.get("status"),)))
 
 def _ror(**kw):
-    return dict({"required": True, "artifact_delivered_at": None,
+    # A recipient by default, because run.py always writes the key and every
+    # case below is about delivery and the window, not about who was named.
+    # Without it they all exited 1 on the unnamed-recipient check instead of
+    # the condition they were written for, and the first one in particular
+    # went on reporting the right number for the wrong reason.
+    return dict({"required": True,
+                 "recipient": "maintainer of subject repository "
+                              "https://github.com/example/subject.git",
+                 "artifact_delivered_at": None,
                  "window_closes_at": None, "reply_received_at": None}, **kw)
 
 _now = datetime.now(timezone.utc)
@@ -3448,6 +3455,14 @@ _long_ago = (_now - _td(days=9)).isoformat()
 _gate("an adverse record nobody delivered does not clear",
       "NBLX-19990101-001",
       {"status": "HELD", "held_by": "right_of_reply", "right_of_reply": _ror()},
+      1, "detect")
+
+_gate("an adverse record naming no recipient does not clear",
+      "NBLX-19990101-010",
+      {"status": "HELD", "held_by": "right_of_reply",
+       "right_of_reply": _ror(recipient=None,
+                              artifact_delivered_at=_long_ago,
+                              window_closes_at=_past)},
       1, "detect")
 
 _gate("an adverse record whose reply window is still open does not clear",

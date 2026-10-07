@@ -76,7 +76,22 @@ def _error_decision(mode, detail):
 def guard(fn, checks, policy, on_decision=None, mode=OBSERVE,
           context_fn=None, action_fn=None, on_gateway_error="block",
           signer=None):
-    """Wrap `fn` so every call is decided, and in enforce mode, gated.
+    """Wrap `fn` so every call is decided, and in enforce mode, withheld.
+
+    WHAT ENFORCE MODE DOES NOT DO, stated first because the word "gated" here
+    used to imply it. `fn` is CALLED BEFORE the decision exists, because the
+    decision is about `fn`'s result and there is nothing to check until it
+    returns. So in enforce mode a non-PERMIT raises Blocked and the caller
+    receives no result, but `fn` has already run. If `fn` has a side effect,
+    that side effect happened. This withholds an answer; it does not prevent
+    an action.
+
+    That is inherent to checking a result, not an oversight, but nothing said
+    so, and every self-test fixture here is a read-only fetch, so the
+    distinction was never exercised. A reader wrapping a mutating call would
+    reasonably have believed enforce mode stopped it. To gate a side effect,
+    the decision has to be made from the request before the call, which is
+    what serve.py's /v1/decisions endpoint is for.
 
     fn               the call being mirrored. Its result is the subject.
     checks           (result, context) -> list of suite outcomes.

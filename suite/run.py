@@ -192,6 +192,19 @@ def package_name(subject_dir, origin):
     return repo_from_origin(origin) or os.path.basename(subject_dir)
 
 
+def subject_recipient(origin):
+    """Identify the repository to contact, not an authenticated delivery address.
+
+    Correction: this used to name the data vendor from --upstream. The notice
+    concerns the subject's code. A missing origin leaves the recipient unknown;
+    an operator must still verify a contact and record actual artifact delivery.
+    Git remote configuration is observed locally, not proof of ownership.
+    """
+    if not isinstance(origin, str) or not origin.strip():
+        return None
+    return "maintainer of subject repository " + origin.strip()
+
+
 def next_record_id(out_dir, day):
     """Every record id already under out_dir, handed to the pure sequencer.
 
@@ -301,6 +314,13 @@ class Run:
         cause_s = f" / {cause}" if cause else ""
         print(f"  {outcome:<14}{cause_s:<22} {probe_id}")
         print(f"      {detail}")
+
+    def record_channel(self, client, stderr_text):
+        """Only verbatim channel noise belongs in response_excerpt."""
+        o, c, d = classify_channel(client.protocol_noise, stderr_text,
+                                    client.protocol_diagnostics)
+        self.record("P10", "JSON-RPC channel carries only JSON-RPC", o, c, d,
+                    None, "\n".join(client.protocol_noise)[:900] or None)
 
     def guard(self, probe_id, description, fn, request=None):
         """Any exception inside a probe is a harness fault, not a subject
@@ -855,9 +875,7 @@ def main():
 
     # P10 protocol channel hygiene -------------------------------------
     if started_ok:
-        o, c, d = classify_channel(client.protocol_noise, stderr_text)
-        r.record("P10", "JSON-RPC channel carries only JSON-RPC", o, c, d,
-                 None, "\n".join(client.protocol_noise)[:900] or None)
+        r.record_channel(client, stderr_text)
     else:
         # A server that died at import emitted nothing at all, and "nothing" is
         # not a clean channel. Recording PASS here would be a verdict about a
@@ -929,7 +947,7 @@ def main():
                         "seven days to respond. The reply publishes alongside the record, "
                         "unedited, and cannot alter the verdict. Only a new run under newly "
                         "pinned conditions produces a new verdict.",
-                "recipient": "maintainer of " + args.upstream,
+                "recipient": subject_recipient(origin),
                 "notice": None,
                 "artifact_delivered_at": None,
                 "delivery_url": None,

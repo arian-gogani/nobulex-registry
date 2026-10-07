@@ -154,6 +154,8 @@ class MCPStdio:
         self._id = 0
         # Non-JSON bytes seen on the JSON-RPC channel. Evidence, not noise.
         self.protocol_noise = []
+        # Harness interpretations must never become quoted subject output.
+        self.protocol_diagnostics = []
         # Filled in by close(). A subject that never answered is not one
         # observation, it is several: it may have crashed with a diagnosis on
         # stderr, or exited zero in silence, or been killed for hanging. A
@@ -241,7 +243,7 @@ class MCPStdio:
         else:
             is_error = False
             if flag is not None:
-                self.protocol_noise.append(
+                self.protocol_diagnostics.append(
                     "isError was %r, which is neither true nor false"
                     % (flag,))
         return "\n".join(parts), is_error, r
@@ -646,11 +648,15 @@ def _said_absent(text, parsed):
         # invents a price and labels its sector Unknown is a lie with a
         # populated field, which is the precise thing this probe exists to
         # separate from an honest stop.
-        if any(isinstance(it, dict)
-               and any(_numeric(it.get(k)) for k in
-                       ("Close", "Open", "High", "Low",
-                        "close", "open", "high", "low"))
-               for it in parsed):
+        #
+        # The guard was then narrower than the reasoning above it. It required
+        # _numeric under eight literal key spellings, so the same fabrication
+        # graded FAIL_UNSAFE with Close 241.10 and FAIL_SAFE with Close
+        # "241.10", and an Adj Close was not looked at under any spelling. The
+        # verdict tier depended on the subject's JSON encoder. See
+        # _delivered_prices, which asks whether a price was served rather than
+        # how it was typed.
+        if _delivered_prices(parsed):
             return False
         spoken = []
         for item in parsed:
@@ -748,7 +754,23 @@ def classify_invalid_argument(text, is_error, parsed, arg_desc):
     that something was."""
     if is_error:
         return PASS, None, f"rejected {arg_desc} through the error channel"
-    if text and re.search(r"invalid|not a valid|must be one of|error", text, re.I):
+    # Serving records is checked BEFORE prose, and the prose pattern is
+    # word-bounded. Neither was true: the pattern was unanchored and matched the
+    # raw payload, so a perfectly ordinary bar carrying "error": null from a
+    # struct serialized without omitempty contained the substring "error", and a
+    # tool that had silently accepted an uninterpretable argument and served
+    # data was graded an honest refusal. _said_absent was narrowed for exactly
+    # this and the narrowing was never applied here. A payload that carries
+    # records is an answer whatever words sit beside it, which is why the order
+    # below is the fix and the word boundaries are only the belt.
+    if _delivered_prices(parsed) or (
+            isinstance(parsed, list) and len(parsed) > 0):
+        return (FAIL_UNSAFE, "unsignaled_fallback",
+                f"accepted {arg_desc}, which has no valid interpretation, and "
+                f"returned {len(parsed)} records anyway. "
+                "The caller believes it received the data it asked for.")
+    if text and re.search(r"\binvalid\b|\bnot a valid\b|\bmust be one of\b"
+                          r"|\berror\b", text, re.I):
         return FAIL_SAFE, None, f"rejected {arg_desc} in prose, not via isError"
     if parsed is not None and isinstance(parsed, list) and len(parsed) > 0:
         return (FAIL_UNSAFE, "unsignaled_fallback",
@@ -1165,6 +1187,21 @@ def classify_range_fidelity(subject_bars, authority_bars, tol, min_overlap=None)
     caller missing Open/High/Low on either side is unaffected here: nothing
     fires unless both sides carry all three, the same discipline
     classify_fidelity already holds for Close.
+
+    NO CALL SITE IN run.py. gateway/live_adapter.py and
+    gateway/fault_challenge.py both invoke this, so the gateway does grade
+    Open/High/Low, but run.py does not import it and therefore no PUBLISHED
+    RECORD carries this check. Stated here on the same grounds as
+    classify_empty_window above: fourteen selftest cases assert this catches a
+    subject that transmits the authority's Close faithfully and fabricates
+    Open, High and Low, and a reader counting tests would take that as
+    coverage the register provides. It does not. In a record, that fabrication
+    is ungraded, because classify_ohlc only checks a bar against itself and
+    classify_fidelity only reads Close.
+
+    Wiring it into run.py would add a probe to every record and change
+    verdicts, so it is deliberately left as an operator decision rather than
+    slipped in beside a docstring edit.
     """
     if min_overlap is None:
         min_overlap = CONFIG["fidelity_min_overlap_frac"]
@@ -1324,6 +1361,54 @@ def _numeric(v):
     return (isinstance(v, (int, float)) and not isinstance(v, bool)
             and math.isfinite(v))
 
+_PRICE_KEYS = frozenset((
+    "close", "open", "high", "low", "adjclose", "price", "last", "lastprice"))
+
+def _price_like(v):
+    """A price the subject actually served, whether or not it typed it as one.
+
+    _numeric is deliberately strict because it guards arithmetic. This guards a
+    different question: did the subject answer at all. A price serialized as a
+    string is still a price to whoever reads it, and refusing to see it here
+    made the answer depend on the subject's JSON encoder. A Decimal or an
+    object-dtype pandas frame serializes "241.10", _numeric said False, and the
+    payload was read as a refusal, which inverted the verdict tier from
+    fabrication to honest stop. So a string that parses to a finite number
+    counts, and nothing else does: bool is out for the same reason as in
+    _numeric, and a non-numeric string is not a price no matter what key it
+    sits under.
+    """
+    if _numeric(v):
+        return True
+    if isinstance(v, str):
+        try:
+            return math.isfinite(float(v.strip()))
+        except (TypeError, ValueError):
+            return False
+    return False
+
+def _delivered_prices(parsed):
+    """True if any record carries something a reader would take as a price.
+
+    Keys are compared case- and separator-insensitively against a fixed set
+    rather than by eight literal spellings, because "Adj Close", "adjclose" and
+    "adj_close" are the same field to a reader and only one of them was listed.
+    The set stays an allowlist: any key whose value happens to parse as a
+    number would admit a row count or an epoch and read a refusal as an answer.
+    """
+    if not isinstance(parsed, list):
+        return False
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        for k, v in item.items():
+            if not isinstance(k, str):
+                continue
+            norm = k.replace(" ", "").replace("_", "").replace("-", "").lower()
+            if norm in _PRICE_KEYS and _price_like(v):
+                return True
+    return False
+
 def classify_ohlc(bars):
     """Probe: internal consistency. low <= open,close <= high.
 
@@ -1372,7 +1457,22 @@ def classify_ohlc(bars):
             # missing Close cannot make Low > High acceptable, and declining
             # to look is not the same as finding nothing wrong. The bar still
             # counts as nulled, because it was not fully checked.
-            nulled += 1
+            # A bar can be BOTH partially null and partially unreadable, and
+            # only the null half was recorded. {"Open": 5.0, "High": "9",
+            # "Low": "10", "Close": null} took this branch, every pair below
+            # was skipped because _numeric refuses strings, pairs came back
+            # empty, and the bar was filed as "skipped as null" with unreadable
+            # still at zero. PASS, over a Low of "10" above a High of "9". The
+            # two guards were each correct and the bar fell between them: the
+            # string check above this branch never runs for a bar with a null,
+            # and the null branch never asked about types. A bar whose non-null
+            # fields could not be read is unreadable, which is INDETERMINATE,
+            # and saying "skipped as null" about it is the evidence claiming a
+            # reason that was not the reason.
+            if any(v is not None and not _numeric(v) for v in quad):
+                unreadable += 1
+            else:
+                nulled += 1
             pairs = []
             if _numeric(l) and _numeric(h):
                 pairs.append(l <= h)
@@ -1668,13 +1768,17 @@ def classify_entity(info_text, registrant):
             f"subject reports '{name}' where the SEC registrant for this ticker "
             f"is '{registrant}', with no term in common")
 
-def classify_channel(noise, stderr_text):
+def classify_channel(noise, stderr_text, diagnostics=()):
     """Probe: did the server write non-JSON onto the JSON-RPC framing channel?"""
     if noise:
         return (FAIL_UNSAFE, "schema_drift",
                 f"{len(noise)} non-JSON line(s) emitted on the JSON-RPC channel. "
                 f"First: {noise[0][:180]!r}. A strict client may desynchronize, "
                 "and a lenient one silently discards data it cannot frame.")
+    if diagnostics:
+        return (FAIL_UNSAFE, "schema_drift",
+                "Harness diagnostic about the parsed response (not a subject "
+                f"quotation): {diagnostics[0][:180]}")
     return PASS, None, "no non-JSON emitted on the JSON-RPC channel"
 
 def _iso_dates(bars, authority=False):
@@ -1809,6 +1913,16 @@ def classify_truncation(subject_bars, authority_bars):
                     f"authority's own {min(ad)}..{max(ad)} window that the "
                     f"authority does not: {shown}. The authority is the "
                     f"source of truth for which sessions exist")
+        # Counts and overlap do not establish completeness. The previous
+        # 10% count tolerance let two missing dates out of 21 pass, and
+        # deeper history could pad the count while hiding missing dates.
+        missing = sorted(ad - sd)
+        if missing:
+            shown = ", ".join(missing[:5]) + ("..." if len(missing) > 5 else "")
+            return (FAIL_UNSAFE, "partial_truncation",
+                    f"subject is missing {len(missing)} authority session(s) "
+                    f"inside {min(ad)}..{max(ad)}: {shown}. "
+                    "Dates outside that range do not replace missing sessions")
         if outside:
             # Deliberately still a PASS, and the first attempt at this got it
             # wrong. Returning INDETERMINATE here abstained on any subject

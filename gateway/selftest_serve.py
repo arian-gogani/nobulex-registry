@@ -145,6 +145,54 @@ def main():
     check("and a new key is a different receipt",
           c["receipt"]["receipt_hash"] != a["receipt"]["receipt_hash"], True)
 
+    # A key stands for ONE request. It used to stand for whichever request
+    # reached it first, and then answered for every later one: the cached
+    # response was returned wholesale with nothing compared. So a $100 order
+    # established a PERMIT and a $999,999,999 order reusing that key inherited
+    # it, with reasons still reporting observed: 100 and the receipt carrying
+    # the first action's hash. The September fix closed the race, where two
+    # IDENTICAL requests both executed. This is the collision, where one key
+    # speaks for two DIFFERENT requests, and replaying a decision is only
+    # honest when the thing decided is the same thing.
+    big = dict(OK_CTX)
+    big["action"] = dict(OK_CTX.get("action", {}), notional_usd=999999999)
+    code, d = post("/v1/decisions",
+                   {"action": ACTION, "outcomes": ["PASS"], "context": big,
+                    "idempotency_key": "ord-1"})
+    check("a reused key with a different payload is refused, not replayed",
+          code, 400)
+    check("and the refusal is not an approval", d.get("decision") == PERMIT,
+          False)
+    check("and it did not inherit the first request's receipt",
+          (d.get("receipt") or {}).get("receipt_hash")
+          == a["receipt"]["receipt_hash"], False)
+
+    # The control. Without this, the check above is satisfied by a server that
+    # has simply stopped honouring idempotency at all.
+    _, again = post("/v1/decisions", req)
+    check("an identical replay of the original key still returns its receipt",
+          again["receipt"]["receipt_hash"], a["receipt"]["receipt_hash"])
+
+    # Same action and outcomes, different evidence. The fingerprint has to
+    # cover context, not just the action, or a caller can change what the
+    # decision was made ON and still collect the old verdict.
+    stale = json.loads(json.dumps(OK_CTX))
+    stale.setdefault("evidence", {}).setdefault("quote", {})["age_ms"] = 999999
+    code, e = post("/v1/decisions",
+                   {"action": ACTION, "outcomes": ["PASS"], "context": stale,
+                    "idempotency_key": "ord-1"})
+    check("a reused key with different evidence is refused too", code, 400)
+
+    # And outcomes. FAIL_UNSAFE evidence under a key that earned PERMIT is the
+    # worst version of this: the verdict that gets replayed is the one the new
+    # evidence contradicts.
+    code, f = post("/v1/decisions",
+                   {"action": ACTION, "outcomes": ["FAIL_UNSAFE"],
+                    "context": OK_CTX, "idempotency_key": "ord-1"})
+    check("a reused key with different outcomes is refused too", code, 400)
+    check("a FAIL_UNSAFE never inherits a PERMIT",
+          f.get("decision") == PERMIT, False)
+
     print("\nThe same idempotency key racing itself still executes once\n")
     # Two requests never get this close in a real network round trip, so
     # this forces it: both threads are made to enter decide() together via

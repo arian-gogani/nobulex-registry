@@ -116,10 +116,13 @@ def main():
               mode=ENFORCE)  # on_gateway_error defaults to block
     try:
         g()
-        FAILURES.append("gateway failure in enforce mode allowed the call")
-        print("  FAIL  gateway failure blocks by default in enforce")
+        # "allowed the call" was wrong, and the wording hid the real limit: fn
+        # has already been called by the time any of this runs, in every mode.
+        # What enforce withholds is the RESULT. See guard()'s docstring.
+        FAILURES.append("gateway failure in enforce mode returned a result")
+        print("  FAIL  gateway failure withholds the result in enforce")
     except Blocked:
-        print("  ok    gateway failure blocks by default in enforce")
+        print("  ok    gateway failure withholds the result in enforce")
 
     g = guard(fetch_good, checks=lambda res, ctx: 1 / 0, policy=POLICY,
               mode=ENFORCE, on_gateway_error="allow", on_decision=on_decision)
