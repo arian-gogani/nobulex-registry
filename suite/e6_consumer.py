@@ -449,6 +449,9 @@ def main(root):
         if exp["verdict"] != got["verdict"]:
             diffs.insert(0, f"verdict: expected {exp['verdict']}, "
                             f"got {got['verdict']}")
+        for field in ("decisive", "payment_ready"):
+            if exp[field] != got[field]:
+                diffs.append(f"{field}: expected {exp[field]}, got {got[field]}")
 
         for k in CLAIM_ORDER:
             want = set(exp.get("codes", {}).get(k, []))
