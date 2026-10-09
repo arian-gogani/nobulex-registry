@@ -24,7 +24,8 @@ from harness import (
     SUITE_VERSION, SCHEMA_VERSION, CONFIG, MCPStdio, aggregate, parse_bars,
     next_in_sequence,
     a1_chart, a2_edgar, AuthorityUnavailable,
-    PASS, FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, OUT_OF_SCOPE,
+    PASS, FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, NOT_EVALUATED,
+    OUT_OF_SCOPE,
     classify_absent_entity, classify_empty_window, classify_invalid_argument,
     classify_padded_argument,
     classify_window_span,
@@ -50,7 +51,7 @@ ABSENT_TICKER = "ZZZZQQ"
 # verdict, this leaves "until" unset rather than issuing a deadline the
 # record cannot possibly meet. The clock starts once
 # publication.right_of_reply.window_closes_at exists.
-REQUIRES_REPLY = {FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE}
+REQUIRES_REPLY = {FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, NOT_EVALUATED}
 
 
 def _validity_block(started, verdict):
@@ -790,8 +791,17 @@ def main():
 
         def live_missing():
             """Why P04 through P08 have nothing to read, in terms a reader can
-            check, rather than in the two words 'no bars'."""
-            return (INDETERMINATE, None,
+            check, rather than in the two words 'no bars'.
+
+            NOT_EVALUATED rather than INDETERMINATE, and the difference is the
+            sentence below: these probes did not fail to decide, they never
+            observed the subject at all. The shared pull returned nothing, so
+            there was no data to judge. A reader scanning outcomes could not
+            previously tell this from a probe that compared and could not
+            decide, which is a distinction the detail already drew and the
+            field did not.
+            """
+            return (NOT_EVALUATED, None,
                     live_note + ". P04 through P08 all read that one response, "
                     "so none of them observed the subject's data and none "
                     "issues a claim about it in either direction.", live_text)
@@ -938,8 +948,8 @@ def main():
             # failing to say what it is withholding, which is the defect this
             # project exists to name. See suite/hold.py, which reports "unstated"
             # rather than inventing a status, and was how this gap was found.
-            "status": "HELD" if verdict in (FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE) else "PUBLISHABLE",
-            "held_by": "right_of_reply" if verdict in (FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE) else None,
+            "status": "HELD" if verdict in REQUIRES_REPLY else "PUBLISHABLE",
+            "held_by": "right_of_reply" if verdict in REQUIRES_REPLY else None,
             "right_of_reply": ({
                 "required": True,
                 "rule": "Before any record with an adverse finding is published, the "
@@ -955,7 +965,7 @@ def main():
                 "window_closes_at": None,
                 "reply_received_at": None,
                 "reply": None,
-            } if verdict in (FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE) else None),
+            } if verdict in REQUIRES_REPLY else None),
         },
         "validity": _validity_block(started, verdict),
         "authorities": {k: dict(CONFIG["authorities"][k], **auth_status.get(k, {}))

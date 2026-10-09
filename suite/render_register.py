@@ -98,6 +98,9 @@ VERDICT_VAR = {
     "FAIL_SAFE": "--safe",
     "FAIL_UNSAFE": "--unsafe",
     "INDETERMINATE": "--indet",
+    # Shares INDETERMINATE's colour on purpose: to a reader both mean no claim
+    # was issued, and only the label distinguishes why.
+    "NOT_EVALUATED": "--indet",
     "OUT_OF_SCOPE": "--oos",
     "WITHDRAWN": "--unsafe",
     "HELD": "--safe",
@@ -122,8 +125,8 @@ NOT_A_FINDING = ("HELD", "WITHDRAWN")
 # duplication is the risk that creates, so selftest.py asserts this list is
 # identical to harness._ORDER: a second copy is allowed to exist only while
 # something fails when the two disagree.
-OUTCOME_ORDER = ["FAIL_UNSAFE", "FAIL_SAFE", "INDETERMINATE", "PASS",
-                 "OUT_OF_SCOPE"]
+OUTCOME_ORDER = ["FAIL_UNSAFE", "FAIL_SAFE", "INDETERMINATE", "NOT_EVALUATED",
+                 "PASS", "OUT_OF_SCOPE"]
 
 # The characters that count as part of a name when matching one inside a
 # larger string. `-` is included: a package called mcp does not appear in

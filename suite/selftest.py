@@ -1829,6 +1829,37 @@ gate("register / a record with no probes makes no claim to check",
 gate("register / the published precedence order is the one the harness applies",
      lambda: _rr.OUTCOME_ORDER == list(_harness._ORDER), True, "detect")
 
+# NOT_EVALUATED is a distinct outcome, not a synonym for INDETERMINATE. It
+# means the probe never observed the subject at all; INDETERMINATE means it
+# looked and could not establish its claim. Taken from the E6 fixture, which
+# separates the two and made the gap here visible.
+gate("outcome / NOT_EVALUATED is its own token",
+     lambda: _harness.NOT_EVALUATED not in
+             (_harness.INDETERMINATE, _harness.PASS, _harness.OUT_OF_SCOPE),
+     True, "detect")
+
+# It must outrank PASS. A run whose probes never read anything is not a pass
+# because some other probe passed, which is the fail-open shape in one line.
+gate("outcome / NOT_EVALUATED beats PASS",
+     lambda: _harness.aggregate([_harness.NOT_EVALUATED, _harness.PASS]),
+     _harness.NOT_EVALUATED, "detect")
+
+# And must yield to anything that did reach a finding, so a real failure is
+# never masked by a probe that did not run.
+gate("outcome / FAIL_UNSAFE still beats NOT_EVALUATED",
+     lambda: _harness.aggregate([_harness.NOT_EVALUATED, _harness.FAIL_UNSAFE]),
+     _harness.FAIL_UNSAFE, "detect")
+gate("outcome / INDETERMINATE beats NOT_EVALUATED",
+     lambda: _harness.aggregate([_harness.NOT_EVALUATED,
+                                 _harness.INDETERMINATE]),
+     _harness.INDETERMINATE, "detect")
+
+# The renderer must be able to colour it. A record carrying an outcome the
+# renderer has no entry for fails at publication time, which is later and
+# worse than failing here.
+gate("register / the renderer can colour NOT_EVALUATED",
+     lambda: _harness.NOT_EVALUATED in _rr.VERDICT_VAR, True, "detect")
+
 # ---- rows, and records that are the wrong shape.
 gate("register / an authority key is escaped once, not twice",
      lambda: "Authority A&amp;B" in _rr.tuple_rows(
@@ -2958,6 +2989,12 @@ gate("disclosure_scan / nothing leaked anywhere returns clean",
 # A1 through a1_missing(); these assert it for the subject.
 
 import run as _run
+
+# Held on the same terms as the other non-answers. A record that could not
+# answer is withheld whether it tried and failed or never read anything; the
+# defect was conflating them in the FIELD, not in the GATE.
+gate("outcome / NOT_EVALUATED is held like the other non-answers",
+     lambda: _harness.NOT_EVALUATED in _run.REQUIRES_REPLY, True, "detect")
 
 # Named for what it wraps rather than _note, which is taken. The page-note
 # fixture up in section 10c is called _note, and this file is one module, so

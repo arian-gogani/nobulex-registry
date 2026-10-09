@@ -30,9 +30,34 @@ UA = "Nobulex-Registry/0.1 (+https://nobulex.com; nobulex.dev@gmail.com)"
 PASS, FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, OUT_OF_SCOPE = (
     "PASS", "FAIL_SAFE", "FAIL_UNSAFE", "INDETERMINATE", "OUT_OF_SCOPE")
 
+# NOT_EVALUATED is a sixth outcome and it is not a synonym for INDETERMINATE.
+#
+#   INDETERMINATE   the probe ran and could not establish its claim. The
+#                   authority did not answer, a value was unreadable, the
+#                   overlap was too thin to judge. Something was attempted.
+#   NOT_EVALUATED   the probe never observed the subject at all, because the
+#                   one thing it reads was never obtained.
+#
+# This came from VeritasActa/e6-fixture, which separates ABSTAIN from
+# NOT_EVALUATED and made the gap in this suite obvious: a reader could not tell
+# a check that failed to run from a check that was never reached. The
+# distinction already existed in this file's prose. live_missing() in run.py
+# says "none of them observed the subject's data" and then returns the same
+# token as a probe that compared and could not decide. The sentence was honest
+# and the field was not.
+#
+# Deliberately NOT a behaviour change. NOT_EVALUATED sits where INDETERMINATE
+# sits in the dominance order and is held on the same terms, so no verdict
+# moves. It changes what a record SAYS about why it could not answer, which is
+# the whole value.
+NOT_EVALUATED = "NOT_EVALUATED"
+
 # Aggregation order. FAIL_UNSAFE dominates everything: one quiet lie is not
-# averaged away by ten correct answers.
-_ORDER = [FAIL_UNSAFE, FAIL_SAFE, INDETERMINATE, PASS, OUT_OF_SCOPE]
+# averaged away by ten correct answers. NOT_EVALUATED ranks immediately beside
+# INDETERMINATE: both mean no claim was issued, and neither may be outranked by
+# a PASS from some other probe.
+_ORDER = [FAIL_UNSAFE, FAIL_SAFE, INDETERMINATE, NOT_EVALUATED, PASS,
+          OUT_OF_SCOPE]
 
 def aggregate(outcomes):
     for o in _ORDER:
