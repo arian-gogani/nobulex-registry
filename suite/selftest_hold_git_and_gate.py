@@ -33,6 +33,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import uuid
 
 HERE = Path(__file__).resolve().parent
 HOLD = runpy.run_path(str(HERE / "hold.py"), run_name="hold_git_gate")
@@ -98,12 +99,22 @@ class TheScanRefusesRatherThanReportingClean(unittest.TestCase):
     def test_control_a_working_git_still_scans(self):
         """Without this the refusal above could be a scan that refuses always.
 
-        The id must appear nowhere in the tree. The first draft used
-        NBLX-00000000-000, which is fixture data in render_register.py and
-        selftest.py, so the scan correctly flagged it and the control failed.
-        The test data was wrong, not the scan.
+        The id must appear nowhere in the tree, including in this file.
         """
-        rc, _text = _quiet(HOLD["disclosure_scan"], ["NBLX-17000101-777"])
+        # Freshly random, so it cannot have been committed by anyone, ever.
+        #
+        # Three drafts to get here, and each failure was instructive. The first
+        # used NBLX-00000000-000, which is fixture data in two source files.
+        # The second used a literal that THIS file then carried, so the scan
+        # found it in a tracked file. The third split the literal across a
+        # concatenation, which fixed the working tree and not the history: the
+        # commit that introduced it still carries the id, and history is
+        # exactly what this scan reads.
+        #
+        # A control for "nothing is here" cannot use a value that something
+        # could be, and anything written down has been written down.
+        absent = "NBLX-19700101-%03d" % (uuid.uuid4().int % 1000)
+        rc, _text = _quiet(HOLD["disclosure_scan"], [absent])
         self.assertEqual(rc, 0)
 
 

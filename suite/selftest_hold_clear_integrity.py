@@ -34,8 +34,15 @@ HOLD = runpy.run_path(str(HERE / "hold.py"), run_name="hold_clear_integrity")
 clear, sha256 = HOLD["cmd_clear"], HOLD["sha256"]
 G = clear.__globals__
 
-PAST = (datetime.datetime.now(datetime.timezone.utc)
-        - datetime.timedelta(days=30)).isoformat()
+# Delivery and the window's close are DIFFERENT instants, seven days apart.
+# They were the same value, which is a zero-length window: the subject was
+# told they had seven days and the record said the window shut the moment the
+# artifact went out. The old gate accepted it because it only asked whether
+# the deadline had passed, never how long the window was.
+_NOW = datetime.datetime.now(datetime.timezone.utc)
+DELIVERED = (_NOW - datetime.timedelta(days=30)).isoformat()
+CLOSES = (_NOW - datetime.timedelta(days=23)).isoformat()
+PAST = DELIVERED
 
 
 class _Tree:
@@ -65,8 +72,9 @@ class _Tree:
                        "required": True,
                        "recipient": "maintainer of subject repository "
                                     "https://github.com/example/s.git",
-                       "artifact_delivered_at": PAST,
-                       "window_closes_at": PAST,
+                       "window_days": 7,
+                       "artifact_delivered_at": DELIVERED,
+                       "window_closes_at": CLOSES,
                        "reply_received_at": None}}}
         rec.update(over)
         p = os.path.join(self.held, rid + ".json")
@@ -189,6 +197,111 @@ class WithdrawnIsNotRepublished(unittest.TestCase):
             p = t.record("NBLX-19990101-210")
             t.commit(p)
             self.assertEqual(_quiet(clear, "NBLX-19990101-210"), 0)
+
+
+class TheGateDoesNotTakeAuthorityFromTheRecord(unittest.TestCase):
+    """held_by is committed to the manifest and printed on the register as the
+    gate. The command that opens the gate did not read it, so deleting one key
+    inside the record removed every precondition."""
+
+    blocked = staticmethod(HOLD["_reply_obligation_unmet"])
+
+    def _ror(self, **over):
+        now = datetime.datetime.now(datetime.timezone.utc)
+        d = now - datetime.timedelta(days=30)
+        ror = {"required": True, "window_days": 7,
+               "recipient": "maintainer of subject repository "
+                            "https://github.com/example/s.git",
+               "artifact_delivered_at": d.isoformat(),
+               "window_closes_at": (d + datetime.timedelta(days=7)).isoformat(),
+               "reply_received_at": None}
+        ror.update(over)
+        return {"publication": {"status": "HELD",
+                                "held_by": "right_of_reply",
+                                "right_of_reply": ror}}
+
+    def test_control_a_discharged_obligation_clears(self):
+        self.assertIsNone(self.blocked(self._ror()))
+
+    def test_a_deleted_reply_block_is_refused_not_waved_through(self):
+        rec = {"publication": {"status": "HELD",
+                               "held_by": "right_of_reply",
+                               "right_of_reply": None}}
+        self.assertIn("held_by", self.blocked(rec) or "")
+
+    def test_required_false_against_a_reply_gate_is_a_contradiction(self):
+        self.assertIsNotNone(self.blocked(self._ror(required=False)))
+
+    def test_a_record_not_held_under_reply_is_unaffected(self):
+        """The control for the cross-check: a publishable record has no block
+        and must not start being refused."""
+        rec = {"publication": {"status": "PUBLISHABLE", "held_by": None,
+                               "right_of_reply": None}}
+        self.assertIsNone(self.blocked(rec))
+
+
+class TheWindowIsTheWindowThatWasPromised(unittest.TestCase):
+    """The only temporal check was now < deadline, with the deadline read from
+    the record being cleared. window_days, which run.py writes as 7, was never
+    read by anything."""
+
+    blocked = staticmethod(HOLD["_reply_obligation_unmet"])
+
+    def _at(self, closes=None, **over):
+        now = datetime.datetime.now(datetime.timezone.utc)
+        d = now - datetime.timedelta(days=30)
+        ror = {"required": True, "window_days": 7,
+               "recipient": "maintainer of subject repository "
+                            "https://github.com/example/s.git",
+               "artifact_delivered_at": d.isoformat(),
+               "window_closes_at": (closes or d + datetime.timedelta(days=7)
+                                    ).isoformat(),
+               "reply_received_at": None}
+        ror.update(over)
+        return ({"publication": {"status": "HELD",
+                                 "held_by": "right_of_reply",
+                                 "right_of_reply": ror}}, d, now)
+
+    def test_a_one_second_window_is_refused(self):
+        rec, d, _ = self._at()
+        rec["publication"]["right_of_reply"]["window_closes_at"] = \
+            (d + datetime.timedelta(seconds=1)).isoformat()
+        self.assertIn("shorter than", self.blocked(rec) or "")
+
+    def test_a_window_closing_before_delivery_is_refused(self):
+        rec, d, _ = self._at()
+        rec["publication"]["right_of_reply"]["window_closes_at"] = \
+            (d - datetime.timedelta(days=1)).isoformat()
+        self.assertIsNotNone(self.blocked(rec))
+
+    def test_a_truthy_non_timestamp_reply_does_not_close_the_window(self):
+        rec, _d, now = self._at(closes=now_plus(5))
+        rec["publication"]["right_of_reply"]["reply_received_at"] = "pending"
+        self.assertIn("not a readable timestamp", self.blocked(rec) or "")
+
+    def test_a_reply_predating_delivery_is_not_a_reply(self):
+        rec, d, _ = self._at(closes=now_plus(5))
+        rec["publication"]["right_of_reply"]["reply_received_at"] = \
+            (d - datetime.timedelta(days=2)).isoformat()
+        self.assertIn("precedes delivery", self.blocked(rec) or "")
+
+    def test_control_a_genuine_reply_closes_an_open_window(self):
+        rec, _d, now = self._at(closes=now_plus(5))
+        rec["publication"]["right_of_reply"]["reply_received_at"] = \
+            (now - datetime.timedelta(days=1)).isoformat()
+        self.assertIsNone(self.blocked(rec))
+
+    def test_a_nonsense_window_days_is_refused(self):
+        for bad in (0, -3, True, "seven", None):
+            with self.subTest(window_days=bad):
+                rec, _d, _ = self._at()
+                rec["publication"]["right_of_reply"]["window_days"] = bad
+                self.assertIsNotNone(self.blocked(rec))
+
+
+def now_plus(days):
+    return (datetime.datetime.now(datetime.timezone.utc)
+            + datetime.timedelta(days=days))
 
 
 if __name__ == "__main__":

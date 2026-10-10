@@ -1499,8 +1499,33 @@ def _reply_obligation_unmet(rec):
     """
     pub = rec.get("publication") or {}
     ror = pub.get("right_of_reply") or {}
+
+    # The gate cannot take its authority from the thing it is gating.
+    #
+    # This keyed everything off `required` inside the block, so deleting one
+    # key removed every precondition below. A record declaring
+    # held_by: right_of_reply with right_of_reply: null cleared with no
+    # recipient, no delivery and no window, and nothing recorded that it had.
+    # The deletion left no trace, because --clear rewrites the file anyway.
+    #
+    # held_by is the field the manifest commits to and the field the register
+    # prints as the gate. There is a committed, published statement that this
+    # record is withheld under right of reply, and the command that opened the
+    # gate did not read it.
+    held_by = pub.get("held_by")
+    claims_reply_gate = isinstance(held_by, str) and \
+        held_by.strip() == "right_of_reply"
+
     if not ror.get("required"):
+        if claims_reply_gate:
+            return ("publication.held_by says this is withheld under right of "
+                    "reply, and right_of_reply.required is not set. One of "
+                    "the two is wrong. A gate that reads its own permission "
+                    "from the record it is gating is not a gate.")
         return None
+    if not isinstance(ror, dict) or not ror:
+        return ("right_of_reply is required and empty, so none of the "
+                "obligations it states can be checked.")
     # Asked before delivery, because delivery to an unnamed party is not a
     # fact this record can hold. run.py leaves the recipient unset rather than
     # guessing when the subject's origin is unreadable, and a record that never
@@ -1520,15 +1545,73 @@ def _reply_obligation_unmet(rec):
     if not closes:
         return ("delivered, but window_closes_at is unset, so there is no "
                 "stated deadline this record can be past.")
-    from datetime import datetime, timezone
+    from datetime import datetime, timedelta, timezone
     try:
         deadline = datetime.fromisoformat(str(closes).replace("Z", "+00:00"))
     except ValueError:
         return "window_closes_at is not a readable timestamp: %r" % (closes,)
     if deadline.tzinfo is None:
         deadline = deadline.replace(tzinfo=timezone.utc)
+    # The window must actually be the window that was promised.
+    #
+    # The only temporal check was `now < deadline`, with the deadline read
+    # from the record being cleared. Nothing compared window_closes_at to
+    # artifact_delivered_at, and window_days, which run.py writes as 7, was
+    # never read by anything. A record delivered at 09:00:00 with a window
+    # closing at 09:00:01 cleared, and so did one whose window closed BEFORE
+    # it was delivered. Neither field is in the manifest, so a shortened
+    # window left nothing committed to contradict it, while the register
+    # states "seven days to answer" as prose.
+    try:
+        delivered = datetime.fromisoformat(
+            str(ror.get("artifact_delivered_at")).replace("Z", "+00:00"))
+    except ValueError:
+        return ("artifact_delivered_at is not a readable timestamp: %r"
+                % (ror.get("artifact_delivered_at"),))
+    if delivered.tzinfo is None:
+        delivered = delivered.replace(tzinfo=timezone.utc)
+
+    days = ror.get("window_days", 7)
+    if not isinstance(days, int) or isinstance(days, bool) or days < 1:
+        return ("window_days is %r, which is not a number of days this "
+                "record can be past." % (days,))
+    # A minute of slack, because the check is about a shortened window and not
+    # about clock jitter. Two timestamps written from two separate now() calls
+    # a microsecond apart made a seven-day window measure seven days minus
+    # three microseconds, and strict comparison refused it. That is the check
+    # being wrong, not the record: nobody shortchanges a subject by a
+    # microsecond, and a guard that fires on serialisation noise gets switched
+    # off. A one-second window and a window closing before delivery are both
+    # still refused by orders of magnitude.
+    promised = delivered + timedelta(days=days) - timedelta(seconds=60)
+    if deadline < promised:
+        return ("the window closes %s but delivery was %s, which is %s, "
+                "shorter than the %d days this record promises. The subject "
+                "was told they had a window; this is a different window."
+                % (deadline.isoformat(), delivered.isoformat(),
+                   deadline - delivered, days))
+
     now = datetime.now(timezone.utc)
-    if now < deadline and not ror.get("reply_received_at"):
+    # A reply is a timestamp, not a truthy string. "pending" used to skip the
+    # window check entirely on a record whose window was wide open.
+    replied = ror.get("reply_received_at")
+    if replied is not None:
+        try:
+            when = datetime.fromisoformat(
+                str(replied).replace("Z", "+00:00"))
+        except ValueError:
+            return ("reply_received_at is not a readable timestamp: %r. A "
+                    "reply is a thing that arrived at a time, and anything "
+                    "truthy here used to close the window." % (replied,))
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        if when < delivered:
+            return ("reply_received_at %s precedes delivery %s, so it is not "
+                    "a reply to this artifact."
+                    % (when.isoformat(), delivered.isoformat()))
+        return None
+
+    if now < deadline:
         return ("the reply window is still open until %s and no reply has "
                 "arrived. Publishing now would take the window back."
                 % deadline.isoformat())
