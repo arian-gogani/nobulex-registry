@@ -120,19 +120,106 @@ def entry(name):
             rec = json.load(fh)
         pub = rec.get("publication") or {}
         row["record_id"] = rec.get("record_id")
-        row["held_by"] = pub.get("held_by") or "unstated"
-        row["publication_status"] = pub.get("status") or "unstated"
+        row["held_by"] = _safe_gate(pub.get("held_by"), name, "held_by")
+        row["publication_status"] = _safe_gate(pub.get("status"), name,
+                                               "publication_status")
     return row
 
 
+# The two manifest fields taken verbatim from a held record. Everything else
+# in a manifest row is computed here: the filename, the byte count, the digest.
+# These two were free text copied straight out of the record, and nothing
+# constrained them.
+#
+# render_register has a guard for exactly this string, and its docstring says
+# why: "A held_by of FAIL_UNSAFE published 'Gate: FAIL UNSAFE' on the public
+# page and the build exited 0." The renderer was hardened and the manifest
+# writer was not, so a held record carrying held_by: FAIL_UNSAFE would put the
+# record id and the verdict class into records/held.manifest.json, the one
+# tracked file the export repository pushes. The renderer would refuse to build
+# the page; nothing would stop the manifest reaching a stranger first.
+#
+# The manifest's whole design, stated at the top of this file, is that it says
+# what is withheld without saying what was found. A verdict class is what was
+# found.
+_SAFE_GATES = frozenset((
+    "right_of_reply", "subject_under_embargo", "unstated",
+    "HELD", "CLEARED", "PUBLISHED", "WITHDRAWN"))
+
+
+def _safe_gate(value, filename, field):
+    """A gate name, or a refusal. Never a verdict class, never free text."""
+    if value is None:
+        return "unstated"
+    if not isinstance(value, str):
+        raise SystemExit(
+            "REFUSED: %s has a non-string %s (%r). The manifest states which "
+            "gate withholds a record; it cannot state a value it cannot read."
+            % (filename, field, value))
+    v = value.strip()
+    if v in _SAFE_GATES:
+        return v
+    raise SystemExit(
+        "REFUSED: %s carries %s=%r, which is not a known gate name.\n"
+        "  The manifest is the one held artifact that goes public, and it is\n"
+        "  designed to say WHAT is withheld without saying what was FOUND.\n"
+        "  Writing this value would put it in a tracked, pushed file.\n"
+        "  Known gates: %s\n"
+        % (filename, field, value, ", ".join(sorted(_SAFE_GATES))))
+
+
 def git(args):
-    """git, or None if it is not there and not usable."""
+    """git's output, or None. None conflates two different facts, see below."""
     try:
         return subprocess.check_output(["git"] + args, cwd=ROOT,
                                        stderr=subprocess.DEVNULL
                                        ).decode("utf-8", "replace")
     except Exception:
         return None
+
+
+# GIT_USABLE, GIT_NO_REPO, GIT_UNUSABLE
+#
+# git() returns None when git answered and the thing asked for is not there,
+# AND when git could not be run at all. Those are opposite facts and the
+# difference decides whether a clean report means anything.
+#
+# Demonstrated before this was written: with a `git` on PATH that exits 127,
+# `--verify-export` printed "no held record is reachable from any commit or
+# named in a message" and "export clean", and exited 0. It had read no commit,
+# no ref and no tracked file, and made a confident positive statement about
+# every commit in the repository. The leak guard reporting clean after reading
+# nothing is the fail-open shape this project exists to refuse, in the one
+# place that guards a promise made to a third party.
+#
+# The old guard could not catch it because the witness that we are in a
+# repository was itself computed with git: when git fails, the witness fails
+# with it and the absence reads as vacuous.
+GIT_USABLE, GIT_NO_REPO, GIT_UNUSABLE = "usable", "no_repo", "unusable"
+
+
+def git_state():
+    """Can git be trusted to answer questions about this tree?
+
+    GIT_UNUSABLE   the binary did not run. Nothing git-shaped is checkable and
+                   no scan result means anything.
+    GIT_NO_REPO    git ran and this is not a repository. Genuinely vacuous: a
+                   loose copy of the files has no history to leak.
+    GIT_USABLE     git ran and this is a repository. Answers are meaningful.
+    """
+    try:
+        subprocess.check_output(["git", "--version"],
+                                stderr=subprocess.DEVNULL)
+    except Exception:
+        return GIT_UNUSABLE
+    try:
+        subprocess.check_output(["git", "rev-parse", "--git-dir"], cwd=ROOT,
+                                stderr=subprocess.DEVNULL)
+    except subprocess.CalledProcessError:
+        return GIT_NO_REPO
+    except Exception:
+        return GIT_UNUSABLE
+    return GIT_USABLE
 
 
 def _canon_id(v):
@@ -278,7 +365,7 @@ MANIFEST_PURPOSE = (
     "the accusation while withholding the evidence for it.")
 
 
-def manifest_in_head_state(rev="HEAD"):
+def manifest_in_head_state(rev="HEAD"):  # noqa: C901
     """Whether `rev` carries a readable manifest: 'absent', 'unreadable', 'ok'.
 
     Three states, not two. A repository whose first commit has not happened,
@@ -299,6 +386,19 @@ def manifest_in_head_state(rev="HEAD"):
     rel = os.path.relpath(MANIFEST, ROOT).replace(os.sep, "/")
     blob = git(["show", "%s:%s" % (rev, rel)])
     if blob is None:
+        # git returning nothing means two opposite things, and the comment
+        # that introduced the "unreadable" refusal named this cause FIRST:
+        # "git did not answer, or the JSON was not a manifest". Only the
+        # second was ever implemented. With git unusable this returned
+        # "absent", head was None, rewritten_commitments and
+        # dropped_commitments both came back empty, and --commit overwrote
+        # every existing commitment, printed success and exited 0.
+        #
+        # A commitment that cannot be read is not a commitment that is not
+        # there. Unreadable refuses; absent is reserved for git answering
+        # that the file is genuinely not in that revision.
+        if git_state() == GIT_UNUSABLE:
+            return "unreadable", None
         return "absent", None
     try:
         m = json.loads(blob)
@@ -1103,7 +1203,22 @@ def disclosure_scan(ids):
     # a clone to carry, because there is nothing to clone. Inside a
     # repository, a scan that returns None looked at nothing and must not be
     # reported as having found nothing.
-    in_repo = git(["rev-parse", "--git-dir"]) is not None
+    # git_state(), not `git(...) is not None`. The old witness was computed
+    # with the same git that had just failed, so when git was unusable the
+    # witness was unusable too and every absence read as vacuous. That is how
+    # this scan printed "no held record is reachable from any commit" after
+    # reading no commit at all.
+    state = git_state()
+    if state == GIT_UNUSABLE:
+        sys.stderr.write(
+            "THE DISCLOSURE SCAN COULD NOT RUN:\n"
+            "  git could not be run at all.\n"
+            "  Nothing was read, so nothing was established about what this\n"
+            "  repository would hand a stranger. This is a failure to look,\n"
+            "  not a finding of nothing, and the difference is the whole\n"
+            "  point of the guard.\n")
+        return 2
+    in_repo = state == GIT_USABLE
     unran = [n for n, v in (("tracked files", tracked),
                             ("history", leaks),
                             ("commit messages", said)) if v is None]
