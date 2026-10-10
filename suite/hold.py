@@ -17,10 +17,23 @@ must be unreadable until its subject has answered.
 A hash commitment gives both. The held records live outside version control.
 What is committed is this manifest: for each held file, its identifier, the
 gate holding it, and its sha256. None of that says what the record found. When
-the record publishes, anyone can hash the published file and compare it to the
-value committed on the day it was issued. Matching means the verdict was not
-touched while the window was open. Not matching means the registry is caught
-by its own repository history, which is the point.
+A held record is checked against that digest at the moment it clears, before
+anything is stamped on it, and a mismatch refuses to publish.
+
+This paragraph used to say that anyone could hash the PUBLISHED file and
+compare it to the committed digest, and that matching proved the verdict was
+untouched. That was never achievable: clearing rewrites publication.status,
+cleared_at, cleared_from and the validity window before the file moves, so the
+published bytes differ from the committed digest every time, for every record,
+tampered or not. Matching could not happen, non-matching carried no
+information, and no code made the comparison at all. The strongest claim in
+this file had no implementation.
+
+What is checkable now: the published record carries publication.held_digest,
+the value it hashed to while held, and that value is in the committed manifest.
+A reader compares those two. The registry also refuses to publish a record
+whose bytes moved during the window, which is the part a reader cannot do for
+themselves and is where the guarantee actually lives.
 
 Two things this is not. It is not a formal commitment scheme: there is no
 nonce, and it relies on the record carrying enough entropy of its own (run
@@ -1437,7 +1450,15 @@ def cmd_clear(record_id):
                          % (record_id, status))
         return 1
 
-    if (rec.get("status") or "").upper() == "WITHDRAWN":
+    # .strip() and an isinstance guard, matching the line seven above and
+    # matching render_register.is_withdrawn, whose docstring already documents
+    # this exact expression as broken: a status of "WITHDRAWN\n", the shape a
+    # record carries when a hand edit leaves the newline inside the quotes,
+    # compared False and the refusal below never fired. The fix was applied in
+    # the renderer and the identical line was left here. Two copies of one rule,
+    # again, and this copy guards publication of a retracted finding.
+    if isinstance(rec.get("status"), str) and \
+            rec["status"].strip().upper() == "WITHDRAWN":
         sys.stderr.write("REFUSED: %s is withdrawn. A withdrawn record is not "
                          "republished, it stays withdrawn and the withdrawal "
                          "is the public fact.\n" % record_id)
@@ -1449,9 +1470,59 @@ def cmd_clear(record_id):
                          % (record_id, blocked))
         return 1
 
+    # The record must still be the record that was committed to.
+    #
+    # This module's headline promise was that anyone could hash a published
+    # record and compare it to the digest committed on the day it was issued,
+    # and that matching proved the verdict was untouched during the window.
+    # That comparison could never succeed: the stamping below rewrites
+    # publication.status, cleared_at, cleared_from and all three validity
+    # fields before the file moves, so the published bytes differ from the
+    # committed digest by construction, for every record that ever clears.
+    # Demonstrated on an untampered record: committed 56087c0c..., published
+    # a4b9481d..., and no code anywhere made the comparison.
+    #
+    # So the check moves here, where it can still be made. The file is hashed
+    # against its commitment BEFORE anything is stamped, and a mismatch refuses
+    # rather than publishes. The digest is then carried into the published
+    # record, so a reader can confirm the published file names a digest that
+    # appears in the committed manifest, which is the checkable version of the
+    # claim the docstring used to make.
+    held_digest = None
+    if os.path.exists(MANIFEST):
+        try:
+            with io.open(MANIFEST, encoding="utf-8") as fh:
+                committed = {r.get("file"): r.get("sha256")
+                             for r in (json.load(fh).get("held") or [])
+                             if isinstance(r, dict)}
+        except Exception as exc:
+            sys.stderr.write(
+                "REFUSED: %s could not be checked against its commitment "
+                "because the manifest did not read: %s. An unread manifest is "
+                "not a clean one.\n" % (record_id, exc))
+            return 2
+        want = committed.get(os.path.basename(path))
+        if want:
+            held_digest = sha256(path)
+            if held_digest != want:
+                sys.stderr.write(
+                    "REFUSED: %s does not match the digest committed for it.\n"
+                    "  committed %s\n  on disk   %s\n"
+                    "  The verdict is fixed when the record is issued and the "
+                    "reply window cannot change it. This file changed. Explain "
+                    "the edit in the commit that updates the manifest, or "
+                    "restore the committed bytes.\n"
+                    % (record_id, want, held_digest))
+                return 2
+
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
 
+    if held_digest:
+        # What this record hashed to while it was held. Lets a reader check the
+        # published file against the committed manifest, which the raw bytes
+        # cannot do once the stamp below is applied.
+        pub["held_digest"] = "sha256:" + held_digest
     pub["status"] = CLEARED_STATUS
     pub["cleared_at"] = now.isoformat()
     pub["cleared_from"] = status or "unstated"
