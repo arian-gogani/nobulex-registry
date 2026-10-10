@@ -238,6 +238,45 @@ def _canon_id(v):
     return v.strip().casefold() if isinstance(v, str) else ""
 
 
+_TAIL = re.compile(r"\d{8}-\d{3,}")
+
+
+def _id_tail(canon):
+    """The date-and-sequence part of a canonical id, or the id unchanged.
+
+    Separated out so ids_in compares one thing and this decides what that thing
+    is. An id whose shape is not recognised falls back to itself, so an
+    unexpected spelling narrows the match rather than widening it to a
+    substring that could appear anywhere.
+    """
+    m = _TAIL.search(canon or "")
+    return m.group(0) if m else canon
+
+
+def _tail_present(tail, hay):
+    """Is `tail` in `hay` as a whole sequence number, not inside a longer one.
+
+    A plain substring test reports -901 inside -9012, which is a different
+    record, and a push guard that refuses over a record the repository does not
+    hold is the false alarm the wrong-repo guard exists to prevent: a reader
+    cannot tell it from a real one and learns to discount the next.
+
+    harness._ID had already solved this with a (?![0-9]) lookahead and this
+    check was first written without it. Both sides are bounded here, because a
+    sequence can be swallowed from the left as easily as from the right.
+    """
+    if not tail:
+        return False
+    i = hay.find(tail)
+    while i != -1:
+        before = hay[i - 1] if i else ""
+        after = hay[i + len(tail):i + len(tail) + 1]
+        if not before.isdigit() and not after.isdigit():
+            return True
+        i = hay.find(tail, i + 1)
+    return False
+
+
 def canon_ids(ids):
     """(spelling the manifest uses, spelling to compare with) for each usable id.
 
@@ -269,6 +308,19 @@ def ids_in(text, canon):
     written. _canon_id's own docstring records that a lower-case spelling of a
     held id has already occurred in this repository.
 
+    The date and sequence alone count. An id is NBLX-yyyymmdd-nnn, and prose
+    drops the prefix the moment the record has already been mentioned: "and
+    00000000-901 is refused" is how a sentence about a second record comes out.
+    That tail identifies the record exactly as well as the whole id does, and
+    matching only the full spelling meant all three scans passed a commit
+    message that named a held record and said what the gate did with it. Found
+    by writing one: the scan reported the prefixed id in a tracked file and in
+    the message beside it, and said nothing about the bare tail in the next
+    commit's message.
+
+    So the tail is what is compared, because every spelling of the id contains
+    it and it is the shortest thing that still points at one record.
+
     Returns ids in the spelling the manifest uses. The spelling that was found
     is deliberately not returned and not printed: it is a substring of a held
     record and the caller's whole job is to not disclose one.
@@ -276,7 +328,7 @@ def ids_in(text, canon):
     if not isinstance(text, str) or not canon:
         return []
     hay = text.casefold()
-    return sorted(rid for rid, c in canon if c in hay)
+    return sorted(rid for rid, c in canon if _tail_present(_id_tail(c), hay))
 
 
 def blobs_in_history():
@@ -1618,8 +1670,66 @@ def _reply_obligation_unmet(rec):
     return None
 
 
-def cmd_clear(record_id):
+def _subject_misnamed(rec):
+    """Refuse to publish a record that names the clone directory as the subject.
+
+    A run installs the subject from a working copy, so subject.package can end
+    up holding the directory the repository was checked out into rather than
+    the name the software is distributed under. Every verdict-bearing field can
+    be sound and the origin and commit can identify the subject exactly, and
+    the record still clears every other check here, because none of them look
+    at the name.
+
+    What publishes is the name. The register renders subject.package, so an
+    adverse finding goes in front of readers under a string that exists only on
+    the machine that ran the harness, and two runs of the same software land on
+    the page under different names with nothing to say they are one subject.
+    The notice sent to a maintainer resolves the distribution name correctly,
+    which makes this the familiar shape: two copies of one fact, one of them
+    right, and the wrong one is the copy that gets published.
+
+    The distribution name is recoverable from the record, so this is checkable
+    rather than a matter of taste: a local file:// requirement whose path ends
+    in the declared package name, under a different distribution name, means
+    the field holds the path tail. Refuse, and say which name to use.
+    """
+    subj = rec.get("subject")
+    if not isinstance(subj, dict):
+        return None
+    pkg = subj.get("package")
+    if not isinstance(pkg, str) or not pkg.strip():
+        return None
+    pkg = pkg.strip()
+    env = subj.get("execution_environment")
+    if not isinstance(env, dict):
+        return None
+    for dep in (env.get("resolved_dependencies") or []):
+        if not isinstance(dep, str) or " @ " not in dep:
+            continue
+        name, _, location = dep.partition(" @ ")
+        name, location = name.strip(), location.strip()
+        if not location.startswith("file:"):
+            continue
+        tail = location.rstrip("/").rsplit("/", 1)[-1]
+        if tail == pkg and name and name != pkg:
+            return ("subject.package is %r, which is the directory this "
+                    "subject was installed from, not its name. The record "
+                    "resolves it as %r from %s. Publishing %r would put an "
+                    "adverse finding on the register under a name that exists "
+                    "only on the machine that ran it. Set subject.package to "
+                    "%r." % (pkg, name, location, pkg, name))
+    return None
+
+
+def cmd_clear(record_id, dry_run=False):
     """Open the gate on exactly one record, named on the command line.
+
+    With dry_run, every refusal below is evaluated and nothing is written. That
+    is one function rather than two on purpose: a separate checker is a second
+    copy of this rule set, and a second copy of a rule with only one of them
+    fixed is the defect this suite has now found five times. The dry run
+    returns at the last point before the first mutation, so it cannot answer a
+    question the real command would answer differently.
 
     There is no --all and no globbing, on purpose. Publication is the one
     irreversible thing this registry does: a verdict about a named third party
@@ -1668,6 +1778,12 @@ def cmd_clear(record_id):
                          % (record_id, blocked))
         return 1
 
+    misnamed = _subject_misnamed(rec)
+    if misnamed:
+        sys.stderr.write("REFUSED: %s would publish under the wrong name.\n"
+                         "  %s\n" % (record_id, misnamed))
+        return 1
+
     # The record must still be the record that was committed to.
     #
     # This module's headline promise was that anyone could hash a published
@@ -1712,6 +1828,16 @@ def cmd_clear(record_id):
                     "restore the committed bytes.\n"
                     % (record_id, want, held_digest))
                 return 2
+
+    # Last point before the first mutation. Everything above reads.
+    if dry_run:
+        print("WOULD CLEAR  %s" % record_id)
+        print("  from status      %s" % (status or "unstated"))
+        print("  held digest      %s"
+              % ("sha256:" + held_digest if held_digest
+                 else "not committed in the manifest"))
+        print("  no file was written and no status changed.")
+        return 0
 
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
@@ -1767,7 +1893,68 @@ def cmd_clear(record_id):
     return 0
 
 
+_READ_ONLY_WITH_RECORDS = ("--check", "--verify", "--audit", "--verify-export")
+
+
+def _aim_at_records(root):
+    """Point this module's path globals at another tree, for reading only.
+
+    These records live in a repository that is deliberately not this one and
+    deliberately has no remote, and the copy of this file sitting beside them
+    is hundreds of lines behind. Every guard added here has therefore been
+    unable to see the only records it exists to protect, and the code that
+    could see them was the code without the guards. Neither tree can be fixed
+    by copying into the other, so the checks travel to the records instead.
+
+    Read-only is the whole design. --clear and --commit refuse an overridden
+    root outright: a publication tool that can be aimed at an arbitrary
+    directory is a tool that can publish an embargoed finding out of a tree
+    nobody was looking at, which is the failure this registry exists to catch
+    in other people's software.
+    """
+    root = os.path.abspath(os.path.expanduser(root))
+    held = os.path.join(root, "records", "held")
+    if not os.path.isdir(held):
+        sys.stderr.write("REFUSED: %s has no records/held/ under it, so it is "
+                         "not a records tree.\n" % root)
+        return None
+    g = globals()
+    g["ROOT"] = root
+    g["RECORDS"] = os.path.join(root, "records")
+    g["HELD"] = held
+    g["MANIFEST"] = os.path.join(root, "records", "held.manifest.json")
+    g["REGISTER"] = os.path.join(root, "brand", "register.html")
+    sys.stderr.write("Reading records from %s (this tree is not written).\n"
+                     % root)
+    return root
+
+
 def main(argv):
+    if "--records" in argv:
+        i = argv.index("--records")
+        if i + 1 >= len(argv):
+            sys.stderr.write("REFUSED: --records needs a path.\n")
+            return 1
+        wanted = [a for a in argv if a in _READ_ONLY_WITH_RECORDS]
+        if not wanted:
+            sys.stderr.write(
+                "REFUSED: --records is for reading another tree, and %s would "
+                "write to it. Publication happens in the repository the "
+                "records live in, with the code that lives beside them.\n"
+                "  Allowed with --records: %s\n"
+                % (" ".join(a for a in argv if a.startswith("--")
+                            and a != "--records") or "that command",
+                   ", ".join(_READ_ONLY_WITH_RECORDS)))
+            return 1
+        if _aim_at_records(argv[i + 1]) is None:
+            return 1
+
+    if "--check" in argv:
+        i = argv.index("--check")
+        if i + 1 >= len(argv):
+            sys.stderr.write("REFUSED: --check needs a record id, by name.\n")
+            return 1
+        return cmd_clear(argv[i + 1], dry_run=True)
     if "--clear" in argv:
         i = argv.index("--clear")
         if i + 1 >= len(argv):
