@@ -93,6 +93,20 @@ A verifier that has not named its own attack surface is asking to be trusted.
 
 **The indeterminate sink.** Precommitting runs stops a verifier from suppressing an unfavourable pass or fail. It does nothing about an unbounded indeterminate, which would let any awkward result be filed as undecidable. So an indeterminate requires a reason drawn from a closed, published list, the indeterminate rate is published per suite and per subject, and a rate that moves when a subject becomes commercially significant is itself a visible fact. An escape hatch that is counted in public is not an escape hatch.
 
+Implemented 20 October 2026, and it was not before. This paragraph committed in
+writing to publishing the indeterminate rate while nothing in the repository
+computed it: `gateway/fault_challenge.py` reported catch rate, false-block rate
+and latency, which are the two numbers that flatter the method plus a speed. It
+now prints the rate alongside them and **asserts a published ceiling of 25%**,
+so the script exits nonzero if the method starts filing its work as
+undecidable. Current corpus: 3 of 17 cases, 17.6%. The ceiling is verified
+load-bearing by lowering it below the measured rate and confirming the run
+fails.
+
+The other half of this commitment, a closed published list of indeterminate
+reasons, is **still not implemented**. Each classifier supplies a free-text
+reason today. That is stated here rather than left for a reader to discover.
+
 **Detection and special casing.** Executing from outside the operator's control domain does not stop the operator from recognising the verifier and behaving differently for it. This is the defeat device problem, and it is the canonical attack on every independent testing regime that has ever existed. The mitigations are operational rather than cryptographic: probes that are not attributable, access acquired through ordinary commercial channels rather than a disclosed testing relationship, randomised timing and request identity, and periodic re execution under a fresh identity to compare against the attributed result. A divergence between attributed and unattributed runs is not a nuisance. It is the most serious finding this system can produce, and it is reportable as such.
 
 Neither mitigation is complete. Both are stated, because a limit that has been named can be priced by the party relying on it.

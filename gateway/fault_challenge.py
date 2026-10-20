@@ -198,6 +198,28 @@ def main():
     failures = []
     caught = 0
     faults = fault_cases()
+    # THE INDETERMINATE RATE. THESIS.md names this as the first of the two
+    # attacks that would break the method, and commits to it in writing:
+    # "an indeterminate requires a reason drawn from a closed, published list,
+    # the indeterminate rate is published per suite and per subject ... An
+    # escape hatch that is counted in public is not an escape hatch."
+    #
+    # Nothing computed it. The challenge reported catch rate, false blocks and
+    # latency, which are the two numbers that flatter the method plus a speed,
+    # and omitted the one number that could show the method quietly declining
+    # to decide. A published commitment with no implementation is the same
+    # defect this project exists to find, so it is measured here and bounded.
+    #
+    # The header of THESIS.md also lists it as a gateway falsification
+    # condition: "an INDETERMINATE rate high enough that operators route
+    # around the gateway". A rate that is printed but unbounded would still be
+    # an escape hatch, so the ceiling is asserted, not merely displayed.
+    evidence_counts = {"PASS": 0, "FAIL": 0, "INDETERMINATE": 0}
+
+    def _record_evidence(decision):
+        evidence_counts[decision["evidence_status"]] = (
+            evidence_counts.get(decision["evidence_status"], 0) + 1)
+
 
     print(f"{'fault':22} {'fired':34} {'evidence':13} decision")
     print("-" * 78)
@@ -205,6 +227,7 @@ def main():
         checks = run_checks(subject)
         outcomes = [o for o, _, _ in checks.values()]
         d = decide(POLICY, outcomes, CONTEXT, mode=MODE_OBSERVE)
+        _record_evidence(d)
 
         fired = [k for k, (o, _, _) in checks.items() if o != "PASS"]
         exp_outcome = checks[expected_check][0]
@@ -241,6 +264,7 @@ def main():
     }
     d = decide(POLICY, [o for o, _, _ in checks.values()], CONTEXT,
                mode=MODE_OBSERVE)
+    _record_evidence(d)
     print(f"{'degraded: authority_null_close':38} {'':18} "
           f"{d['evidence_status']:13} {d['decision']}")
     if d["decision"] != ESCALATE:
@@ -256,6 +280,7 @@ def main():
         checks = run_checks(subject)
         outcomes = [o for o, _, _ in checks.values()]
         d = decide(POLICY, outcomes, CONTEXT, mode=MODE_OBSERVE)
+        _record_evidence(d)
         ok = d["decision"] == PERMIT
         permitted += ok
         if not ok:
@@ -277,8 +302,27 @@ def main():
     p50, p95, p99 = qs[49], qs[94], qs[98]
 
     print()
+    total_decided = sum(evidence_counts.values())
+    indet = evidence_counts["INDETERMINATE"]
+    indet_rate = (indet / total_decided) if total_decided else 0.0
+    # The ceiling is a judgement, stated rather than tuned to the current run.
+    # A corpus of thirteen deliberate faults plus three clean cases plus one
+    # degraded-authority case SHOULD produce some indeterminates: that is the
+    # method refusing to call an unreadable comparison clean. What it must not
+    # do is file most of its work as undecidable.
+    INDETERMINATE_CEILING = 0.25
+
     print(f"catch rate        {caught}/{len(faults)} faults ended in a non-permit")
     print(f"false blocks      {len(cleans) - permitted}/{len(cleans)} clean cases")
+    print(f"indeterminate     {indet}/{total_decided} cases "
+          f"({indet_rate:.1%}), ceiling {INDETERMINATE_CEILING:.0%}"
+          f"   [PASS {evidence_counts['PASS']} / FAIL {evidence_counts['FAIL']}]")
+    if indet_rate > INDETERMINATE_CEILING:
+        failures.append(
+            f"indeterminate rate {indet_rate:.1%} exceeds the published "
+            f"ceiling of {INDETERMINATE_CEILING:.0%}. THESIS.md calls an "
+            "unbounded indeterminate the first attack on this method, so this "
+            "is a failure and not a note.")
     print(f"decide() latency  p50 {p50:.3f} ms  p95 {p95:.3f} ms  p99 {p99:.3f} ms"
           f"  ({n} in-process evaluations, policy only)")
     print()
@@ -288,8 +332,9 @@ def main():
         for f in failures:
             print("  " + f)
         return 1
-    print("every fault was caught, every clean case permitted, and this "
-          "script exits nonzero the day either stops being true.")
+    print("every fault was caught, every clean case permitted, the "
+          "indeterminate rate is inside its published ceiling, and this "
+          "script exits nonzero the day any of those stops being true.")
     print("Fictional corpus, offline. A pilot replays it against your path; "
           "that run's numbers are about your system, not this one.")
     return 0
