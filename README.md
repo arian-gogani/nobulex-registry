@@ -19,7 +19,7 @@ come away confused about what is being offered.
 may execute right now: it verifies the evidence behind the action, evaluates a
 bounded policy, returns `PERMIT`, `BLOCK` or `ESCALATE`, and emits a
 hash-chained receipt. That is what nobulex.com describes and it is where the
-current work goes. 
+current work goes.
 
 **What it is actually for, stated narrowly because a control narrowed it.**
 Not catching bad data. On a corpus of thirteen well-formed-but-wrong faults, a
