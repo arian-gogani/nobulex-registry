@@ -1,8 +1,10 @@
 # Why this role has to exist
 
-> **This argues for the registry, which is the prior direction, not the
-> gateway, which is the product.** It was written when Nobulex was an
-> independent party grading third-party tools, and it reads that way
+> **This argues for the registry, which is a prior direction, not the
+> gateway, which is another prior prototype.** Nobulex's current focus is
+> [billing accuracy](https://github.com/arian-gogani/nobulex/blob/main/docs/CURRENT-IDEA.md).
+> This was written when Nobulex was an independent party grading third-party
+> tools, and it reads that way
 > throughout: "gateway" appears once below, as a category it dismisses, and
 > `PERMIT`, `BLOCK`, `ESCALATE`, Observe Mode and the receipt semantics the
 > site describes appear nowhere in it. Several arguments here assume a subject
@@ -18,8 +20,8 @@
 >
 > The falsification section has not been rewritten and should be read with
 > that in mind. Its five conditions test the registry thesis, so as a test of
-> the current product they are the wrong five. The gateway versions, none of
-> which are argued below, are: a false-block rate too high for anyone to move
+> the current billing thesis they are the wrong five. The gateway versions,
+> none of which are argued below, are: a false-block rate too high to move
 > from observe to enforce, an INDETERMINATE rate high enough that operators
 > route around the gateway, and a competent team deciding three hundred lines
 > in-house does the same job. Until this is rewritten around those, read it as

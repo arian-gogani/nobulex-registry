@@ -1,8 +1,11 @@
 # Nobulex
 
-**Decision integrity for autonomous finance.**
+**Earlier prototype: decision integrity for autonomous finance.** Nobulex's
+current focus is [billing accuracy for usage-based products](https://github.com/arian-gogani/nobulex/blob/main/docs/CURRENT-IDEA.md).
+This repository preserves the gateway and verification harness; it is not the
+current product offer.
 
-A well-formed lie passes every schema check. This verifies the financial facts behind a proposed action, evaluates a deterministic policy, and decides whether the action may execute.
+A well-formed lie passes every schema check. The gateway prototype checks the financial evidence behind a proposed action, evaluates a deterministic policy, and decides whether the action may execute.
 
 Financial data first, because it is the one place the right answer is checkable against an outside authority.
 
@@ -10,16 +13,16 @@ Financial data first, because it is the one place the right answer is checkable 
 
 [The method](https://nobulex.com/methodology) · [Why this role has to exist, as first argued](THESIS.md)
 
-### What is in this repository, and which part is the product
+### What is in this repository
 
 Two surfaces live here, and reading them as one thing is the fastest way to
 come away confused about what is being offered.
 
-**The gateway is the product.** `gateway/` decides whether a specific action
+**The gateway is a prior prototype.** `gateway/` decides whether a specific action
 may execute right now: it verifies the evidence behind the action, evaluates a
 bounded policy, returns `PERMIT`, `BLOCK` or `ESCALATE`, and emits a
-hash-chained receipt. That is what nobulex.com describes and it is where the
-current work goes.
+hash-chained receipt. The current billing-accuracy thesis and tools live in
+[the main Nobulex repository](https://github.com/arian-gogani/nobulex).
 
 **What it is actually for, stated narrowly because a control narrowed it.**
 Not catching bad data. On a corpus of thirteen well-formed-but-wrong faults, a
@@ -36,10 +39,10 @@ incomparable value falls through its `except`. Each default is individually
 defensible. Together they fail open exactly when evidence is missing, which is
 the condition the thing was bought to cover.
 
-So the buying argument is "you can write this in thirty lines, it will pass
-your tests, and the cases it gets wrong are the ones nobody writes a test
-for." Anything broader than that is not supported by a run in this
-repository.
+The narrow technical argument for this prototype is "you can write this in
+thirty lines, it will pass your tests, and the cases it gets wrong are the ones
+nobody writes a test for." Anything broader than that is not supported by a
+run in this repository.
 
 **The registry is a prior direction, kept rather than deleted.** `suite/` is a
 verification harness that grades third-party tools, and the sections further
@@ -485,7 +488,8 @@ The generator refuses at build time to write a page carrying a held record's ide
 
 ## The register
 
-The test suite is the product. The register is where its results are published.
+In the original registry concept, the test suite was the product and the
+register was where its results were published.
 
 A record is a reproducible, independently checkable object with a subject tuple, a verdict, a loss cause classification, a validity window, and a suite reference. Anyone will be able to pull it, rerun it, and disagree with it in public. If a record cannot be independently reproduced by a stranger, it was never evidence, and it does not belong in the register.
 
