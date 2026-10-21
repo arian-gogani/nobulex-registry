@@ -108,6 +108,32 @@ classifiers into the real decision layer, with catch rate, false-block rate
 and policy-evaluation latency printed as measurements. It exits nonzero the
 day any fault stops being caught or any clean case stops being permitted.
 
+**The pilot is now a command rather than a promise.** This sentence described
+something nothing implemented until 21 October 2026: every artifact here ran
+against a fictional offline corpus, so you could not get a number about your own
+system without trusting ours.
+
+```bash
+python3 gateway/pilot.py --subject your_bars.json --authority authority_bars.json
+```
+
+Offline, nothing phoned home, no network calls to us. It prints the verdict per
+check, the decision, the indeterminate rate against the same 25% ceiling, and
+the policy latency.
+
+**It refuses to print a catch rate or a false-block rate.** Those are the two
+numbers a vendor most wants to show you, and over your data they are not
+quantities the program can know, because your rows are not labelled: that is why
+you are running it. Both report `NOT_EVALUATED` unless you pass `--labels`, and
+with labels the output says the numbers are about your labels rather than about
+reality. A tool that printed them anyway would be the exact defect this project
+exists to find.
+
+It exits 2 rather than 0 on absent, empty or unreadable input, because a run
+that examined nothing has established nothing. Checks it could not run stay in
+the indeterminate denominator rather than vanishing from it. Controls:
+`python3 gateway/selftest_pilot.py`.
+
 ```bash
 python3 gateway/fault_challenge.py
 ```
