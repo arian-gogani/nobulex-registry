@@ -26,6 +26,7 @@ from decide import (  # noqa: E402
 )
 from harness import AuthorityUnavailable  # noqa: E402
 import serve  # noqa: E402
+from harness import _ORDER  # noqa: E402
 from serve import build_server  # noqa: E402
 
 FAILURES = []
@@ -456,6 +457,16 @@ def main():
         print("  ok    an incomplete policy is refused at startup")
 
     httpd.shutdown()
+    # The HTTP layer keeps its OWN copy of the classifier outcome list, and a
+    # second copy of a list is how this drifts. It listed five of the six until
+    # 21 Oct 2026, so a caller sending the suite's own NOT_EVALUATED got a 400
+    # whose error body published the incomplete five-value list back as "the
+    # suite verdicts". Pinned structurally rather than by example, for the same
+    # reason as the gateway's _EVIDENCE check: an example test only catches the
+    # outcome you thought to write down.
+    check("serve's KNOWN_OUTCOMES covers every outcome the suite ranks",
+          serve.KNOWN_OUTCOMES == set(_ORDER), True)
+
     print()
     if FAILURES:
         print(f"{len(FAILURES)} failed:\n")

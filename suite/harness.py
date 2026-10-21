@@ -60,9 +60,35 @@ _ORDER = [FAIL_UNSAFE, FAIL_SAFE, INDETERMINATE, NOT_EVALUATED, PASS,
           OUT_OF_SCOPE]
 
 def aggregate(outcomes):
+    # An outcome that is not in _ORDER used to be INVISIBLE here: this walked
+    # _ORDER and returned the first member present, so anything unrecognised was
+    # simply never looked at. aggregate(["PASS", "WAT"]) returned PASS, and the
+    # gateway turned that into PERMIT. One unreadable outcome beside one pass
+    # produced a clean permit, which is precisely the shape this suite exists to
+    # catch, in the function every verdict in the project funnels through.
+    #
+    # Found 21 Oct 2026 while fixing a narrower symptom: NOT_EVALUATED, a sixth
+    # outcome defined and emitted by this very file, was missing from the
+    # gateway's evidence map. Mapping it fixed the lone-outcome case and left
+    # this one, because the drop happens here rather than there.
+    #
+    # An outcome nobody can interpret means no claim was established, which is
+    # what INDETERMINATE means, so it ranks there. It must not be outranked by
+    # PASS or by OUT_OF_SCOPE. It must still be dominated by FAIL_UNSAFE and
+    # FAIL_SAFE: a quiet lie found by one probe is not made less true by another
+    # probe returning something unparseable.
+    unknown = [o for o in outcomes if o not in _ORDER]
+    _indeterminate_rank = _ORDER.index(INDETERMINATE)
     for o in _ORDER:
         if o in outcomes:
+            if unknown and _ORDER.index(o) > _indeterminate_rank:
+                return INDETERMINATE
             return o
+    if unknown:
+        return INDETERMINATE
+    # Nothing at all was supplied. Callers guard the empty case before reaching
+    # here (see the gateway's evidence_status), and OUT_OF_SCOPE maps to an
+    # abstention downstream, so this is not a pass either way.
     return OUT_OF_SCOPE
 
 # ---------------------------------------------------------------- record ids

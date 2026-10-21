@@ -42,13 +42,18 @@ from decide import (  # noqa: E402
 )
 from harness import (  # noqa: E402
     AuthorityUnavailable, FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE,
-    OUT_OF_SCOPE, PASS,
+    NOT_EVALUATED, OUT_OF_SCOPE, PASS,
 )
 from live_adapter import authority_bars, subject_from_authority  # noqa: E402
 from live_adapter import run as live_run  # noqa: E402
 
+# All SIX classifier outcomes. This listed five until 21 Oct 2026, so a caller
+# sending the suite's own NOT_EVALUATED was rejected as unknown, and the 400
+# response published the incomplete five-value list back to them as the set of
+# suite verdicts.
 KNOWN_OUTCOMES = frozenset(
-    (PASS, FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, OUT_OF_SCOPE))
+    (PASS, FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, NOT_EVALUATED,
+     OUT_OF_SCOPE))
 
 MAX_BODY = 1 << 20   # 1 MiB. A decision request is small; larger is a mistake.
 MAX_DRAIN = 1 << 24  # 16 MiB. Past this, close rather than keep reading.

@@ -16,11 +16,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "suite"))
 
 from decide import (  # noqa: E402
     BLOCK, ESCALATE, EV_FAIL, EV_INDETERMINATE, EV_PASS, MODE_ENFORCE,
-    MODE_OBSERVE, PERMIT, PolicyError, decide, ed25519_signer,
+    MODE_OBSERVE, PERMIT, PolicyError, _EVIDENCE, decide, ed25519_signer,
     evidence_status, receipt, sha256, validate_policy, verify_receipt,
 )
+from harness import _ORDER  # noqa: E402
 from harness import (  # noqa: E402
-    FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, OUT_OF_SCOPE, PASS,
+    FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, NOT_EVALUATED, OUT_OF_SCOPE,
+    PASS,
 )
 
 FAILURES = []
@@ -218,6 +220,57 @@ def main():
     check("and a different body hashes differently",
           receipt(decide(POLICY, [FAIL_UNSAFE], CTX_OK), action,
                   refs)["receipt_hash"] != first["receipt_hash"], True)
+
+    # --- all SIX classifier outcomes reach a decision, 21 Oct 2026 -----------
+    # NOT_EVALUATED is defined, ranked and emitted by the suite, and holds
+    # records under right of reply, but was absent from decide()'s evidence map,
+    # so decide() raised KeyError on it three lines under a docstring promising
+    # it "Never raises for ordinary input".
+    for outcome in (PASS, FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, NOT_EVALUATED,
+                    OUT_OF_SCOPE):
+        try:
+            got = decide(POLICY, [outcome], CTX_OK)["decision"]
+        except Exception as exc:  # noqa: BLE001
+            got = f"RAISED {type(exc).__name__}"
+        check(f"decide() handles {outcome} without raising",
+              got in (PERMIT, BLOCK, ESCALATE), True)
+    # THE STRUCTURAL INVARIANT, and the one that would have caught the original
+    # bug the day it was introduced. The two behavioural guards below (the
+    # explicit NOT_EVALUATED entry, and evidence_status's abstaining .get()
+    # default) are MUTUALLY REDUNDANT: sabotage either alone and every assertion
+    # here still passes, because the other covers for it. Verified by doing
+    # exactly that. So neither is pinned by a behavioural check, and asserting
+    # otherwise would be the "one mutation covered two comparisons" mistake.
+    #
+    # What is NOT redundant is this: every outcome the suite RANKS must have an
+    # evidence mapping. aggregate() can return any member of harness._ORDER, so
+    # a member with no entry is a KeyError waiting for the first subject that
+    # produces it. That is precisely how NOT_EVALUATED got through.
+    check("_EVIDENCE maps every outcome the suite ranks in _ORDER",
+          sorted(_EVIDENCE) == sorted(_ORDER), True)
+    check("and ranks every outcome it maps, so neither list drifts alone",
+          set(_ORDER) == set(_EVIDENCE), True)
+
+    check("NOT_EVALUATED is evidence INDETERMINATE, not a pass",
+          evidence_status([NOT_EVALUATED]), EV_INDETERMINATE)
+    check("a PASS beside NOT_EVALUATED does not outrank it",
+          decide(POLICY, [PASS, NOT_EVALUATED], CTX_OK)["decision"], ESCALATE)
+
+    # --- an outcome nobody recognises must not be averaged away by a PASS ----
+    # aggregate() walked a fixed order and returned the first member present,
+    # so an outcome outside that order was INVISIBLE: aggregate(["PASS","WAT"])
+    # returned PASS and the gateway turned it into PERMIT. One unreadable
+    # outcome beside one pass produced a clean permit.
+    check("an unrecognised outcome alone abstains",
+          decide(POLICY, ["WAT"], CTX_OK)["decision"], ESCALATE)
+    check("an unrecognised outcome BESIDE a pass still abstains",
+          decide(POLICY, [PASS, "WAT"], CTX_OK)["decision"], ESCALATE)
+    check("order of arguments does not change that",
+          decide(POLICY, ["WAT", PASS], CTX_OK)["decision"], ESCALATE)
+    check("an unrecognised outcome does not soften FAIL_UNSAFE",
+          decide(POLICY, [FAIL_UNSAFE, "WAT"], CTX_OK)["decision"], BLOCK)
+    check("a clean all-pass set still permits",
+          decide(POLICY, [PASS, PASS], CTX_OK)["decision"], PERMIT)
 
     print()
     if FAILURES:

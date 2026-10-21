@@ -29,7 +29,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "suite"))
 from harness import (  # noqa: E402
-    PASS, FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, OUT_OF_SCOPE, aggregate,
+    PASS, FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, NOT_EVALUATED,
+    OUT_OF_SCOPE, aggregate,
 )
 
 # -- evidence statuses -------------------------------------------------------
@@ -65,6 +66,21 @@ _EVIDENCE = {
     FAIL_SAFE: EV_INDETERMINATE,
     INDETERMINATE: EV_INDETERMINATE,
     OUT_OF_SCOPE: EV_INDETERMINATE,
+    # NOT_EVALUATED was missing until 21 Oct 2026, and its absence made this
+    # dict raise KeyError on an outcome the suite defines (harness.py), ranks
+    # (its _ORDER), emits (run.py's live_missing path) and holds records under
+    # right of reply for (run.py's REQUIRES_REPLY). So decide() raised on
+    # ordinary input, three lines under a docstring promising it never does.
+    #
+    # The suite already settled the mapping: its _ORDER comment says
+    # NOT_EVALUATED "ranks immediately beside INDETERMINATE: both mean no claim
+    # was issued". The distinction the suite draws between them (a probe that
+    # ran and could not establish its claim, versus a probe that never observed
+    # the subject) is real and is preserved in the record. It does not survive
+    # into the three-state evidence layer, because at this layer both are "no
+    # evidence", and that is the whole reason this layer has three states and
+    # the classifier has six.
+    NOT_EVALUATED: EV_INDETERMINATE,
 }
 
 
@@ -108,7 +124,15 @@ def evidence_status(outcomes) -> str:
     if not outcomes:
         # No checks ran. This is the all([]) case, and it is not a pass.
         return EV_INDETERMINATE
-    return _EVIDENCE[aggregate(list(outcomes))]
+    worst = aggregate(list(outcomes))
+    # An outcome this layer has never heard of abstains rather than raising or
+    # passing. Indexing directly is what produced the NOT_EVALUATED KeyError
+    # above: a sixth classifier outcome was added to the suite and this dict was
+    # not told. A .get() default of EV_PASS would be the defect this repository
+    # is about; raising would break the docstring promise. Unknown never passes,
+    # so unknown abstains, and the unmapped name is carried out in the reason so
+    # it is visible rather than smoothed over.
+    return _EVIDENCE.get(worst, EV_INDETERMINATE)
 
 
 def validate_policy(policy) -> None:
