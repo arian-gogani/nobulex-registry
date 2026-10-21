@@ -25,6 +25,35 @@
 > in-house does the same job. Until this is rewritten around those, read it as
 > history rather than as the current argument.
 
+**That third condition was tested on 20 October 2026, and it is half met.**
+`gateway/inhouse_control.py` writes the in-house version in about thirty lines
+and runs the same corpus through it. The result goes against this document and
+is published rather than buried:
+
+| Axis | real `decide()` | in-house, ~30 lines |
+|---|---|---|
+| 13 well-formed-but-wrong faults | 13/13 caught | **13/13 caught**, 0 false blocks |
+| 5 absent-or-unreadable conditions | blocks or escalates all 5 | **permits all 5** |
+
+On the first axis the short version does the same job, so **the gateway does
+not earn its keep by catching bad data**. The catch rate belongs to the
+suite's classifiers, which both versions share. Any pitch resting on the
+fault-corpus catch rate as the gateway's contribution is overclaiming, and the
+line count does not rescue it either: `decide.py` is 271 lines of code, under
+the three-hundred bar this paragraph set.
+
+The margin is entirely on the second axis, and it is one shape: every default
+in the short version resolves toward PERMIT. `all([])` is True, a missing
+dotted field reads as 0 and 0 is under every cap, and an incomparable value
+falls through its `except TypeError`. Each is individually defensible and a
+reviewer would approve all three. A control case with the number present and
+six times over the cap blocks in both versions, so those five are
+permissiveness rather than a broken stub.
+
+**So the gateway's whole claim is abstention, and that is the only claim this
+run supports.** You can build it in-house in thirty lines, it will pass your
+tests, and the conditions it gets wrong are the ones nobody writes a test for.
+
 Nobulex independently verifies what machines actually do, so others can decide what they should be allowed to do.
 
 The README of this repository describes the mechanism: what a record is, what the five verdicts mean, what a subject tuple contains, who pays, and what the project has not yet done. This document is the argument underneath it. It is here because a project claiming that evidence must state what it establishes should state what its own reasoning rests on, and should say what would prove it wrong.
