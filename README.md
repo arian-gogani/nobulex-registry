@@ -6,7 +6,7 @@ A well-formed lie passes every schema check. This verifies the financial facts b
 
 Financial data first, because it is the one place the right answer is checkable against an outside authority.
 
-[THESIS.md](THESIS.md) holds the argument underneath this, written for the registry rather than the gateway and marked as such at the top. The part that survived the change is the load-bearing one: a signature proves who made a claim, not that the claim was true. Its falsification section still tests the registry thesis, so it is history rather than the current argument, and it says so.
+[THESIS.md](THESIS.md) holds the argument underneath this, written for the registry rather than the gateway and marked as such at the top. The part that survived the change is the load-bearing one: a signature proves who made a claim, not that the claim was true. Its falsification section still tests the registry thesis, so as an argument it is history rather than the current one, and it says so. What is **not** history is the header's three gateway falsification conditions: as of 20 October 2026 all three are measured in code and gated, and the third one came back against the gateway. See [gateway/inhouse_control.py](gateway/inhouse_control.py) before taking the fault-corpus catch rate as the decision layer's contribution, because it is not.
 
 [The method](https://nobulex.com/methodology) · [Why this role has to exist, as first argued](THESIS.md)
 
@@ -19,7 +19,27 @@ come away confused about what is being offered.
 may execute right now: it verifies the evidence behind the action, evaluates a
 bounded policy, returns `PERMIT`, `BLOCK` or `ESCALATE`, and emits a
 hash-chained receipt. That is what nobulex.com describes and it is where the
-current work goes.
+current work goes. 
+
+**What it is actually for, stated narrowly because a control narrowed it.**
+Not catching bad data. On a corpus of thirteen well-formed-but-wrong faults, a
+thirty-line in-house version catches all thirteen, exactly as many as this
+does, with no false blocks. That comparison is in
+[gateway/inhouse_control.py](gateway/inhouse_control.py) and it runs.
+
+The gateway's margin is **abstention**: deciding correctly when the evidence is
+absent or unreadable rather than wrong. On five such conditions, the short
+version permits all five and this blocks or escalates all five. The reason is
+one shape, and it is not a lack of care in the short version: `all([])` is
+True, a missing field reads as zero and zero is under every cap, and an
+incomparable value falls through its `except`. Each default is individually
+defensible. Together they fail open exactly when evidence is missing, which is
+the condition the thing was bought to cover.
+
+So the buying argument is "you can write this in thirty lines, it will pass
+your tests, and the cases it gets wrong are the ones nobody writes a test
+for." Anything broader than that is not supported by a run in this
+repository.
 
 **The registry is a prior direction, kept rather than deleted.** `suite/` is a
 verification harness that grades third-party tools, and the sections further

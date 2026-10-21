@@ -24,6 +24,19 @@
 > route around the gateway, and a competent team deciding three hundred lines
 > in-house does the same job. Until this is rewritten around those, read it as
 > history rather than as the current argument.
+>
+> **Status of those three as of 20 October 2026: all three are now measured,
+> and each is gated rather than merely printed.** This replaces the sentence
+> above that said none of them were argued; they are not argued here, but they
+> are tested in code and a run exits nonzero when one drifts.
+>
+> | Gateway condition | Measured where | Result | Gate |
+> |---|---|---|---|
+> | False-block rate too high to move from observe to enforce | `gateway/fault_challenge.py` | 0 of 3 clean cases blocked | every clean case must PERMIT |
+> | INDETERMINATE rate high enough that operators route around it | `gateway/fault_challenge.py` | 3 of 17 cases, 17.6% | ceiling 25%, asserted |
+> | A competent team deciding three hundred lines in-house does the same job | `gateway/inhouse_control.py` | **half met, against this document** | over-cap control must block in both |
+>
+> The third is the one to read. It did not come back clean.
 
 **That third condition was tested on 20 October 2026, and it is half met.**
 `gateway/inhouse_control.py` writes the in-house version in about thirty lines
