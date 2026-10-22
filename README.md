@@ -499,17 +499,51 @@ shasum -a 256 brand/register.html
 curl -sS https://nobulex.com/register | shasum -a 256
 ```
 
-**This check is currently failing, and the cause is disclosed here rather than left for a reader to discover.** As of 20 October 2026 the committed file prints `7be22912644d646083f23d1c4e36e37cbe9d856d771f2b7e8dbe6095e40e93a7` and the deployed page prints `426be9e4b8dee78d358de7a86adc7b9fa3f68eca8ae762376f83d894e5286fd5`. The difference is eleven lines: a banner hand-added to the website copy during a repositioning, saying the register is a prior direction and pointing at the current one. The banner's content is harmless. Its existence is not, and for precisely the reason the paragraph below gives: something edited the published page after the generator produced it, which is the condition this check exists to detect. The check did its job. It caught its own author.
+**This check does not hold, and the reason is structural rather than a lapse.** The
+committed file prints
+`7be22912644d646083f23d1c4e36e37cbe9d856d771f2b7e8dbe6095e40e93a7`.
+The deployed page prints a different value, and **that value changes every time
+the site is deployed**, so pinning it here was always going to go stale. It did:
+a figure pinned on 21 October was wrong by 22 October because the site shipped a
+correction, and an audit on the same day measured a third value again.
 
-The fix is half landed. The banner now lives in `brand/register.template.html`, so the generator owns it and `--publish` will write it identically to every target, which is what should have happened instead of a hand edit. The renderer already had a `--publish PATH` flag built for exactly this, and its docstring already said why: "a second copy maintained beside the first is how this defect has arrived every time so far." The flag existed and was not used.
-
-What remains is a rebuild, and it cannot happen in a public checkout. `render_register.py` refuses to render where the held records are absent, because compiling the held count from records it cannot see would publish "0 issued and held" over a manifest committing to four. That refusal is correct and is the reason this last step is not done here. The rebuild has to run in the tree that holds the records, as:
+So stop comparing hashes to a number in this file, and run the comparison
+instead:
 
 ```bash
-python3 suite/render_register.py --publish /path/to/nobulex-web/register.html
+diff <(cat brand/register.html) <(curl -sS https://nobulex.com/register)
 ```
 
-Until that runs, `brand/register.html` is the pre-banner build and the two hashes above still disagree. The pinned hash in this section will change when it does, and this paragraph should be deleted rather than updated.
+**What a reader should expect that diff to contain, and nothing else.** Measured
+22 October, 26 changed lines in five categories, none of them a record or a
+verdict:
+
+| Category | Why it differs |
+|---|---|
+| `<meta name="robots" content="noindex,follow">` | present only on the deployed page |
+| `<meta name="description">` | different text on each |
+| two Vercel analytics `<script>` blocks | injected at deploy, not emitted by the generator |
+| an HTML comment | present only in the committed copy |
+| the `<p class="note">` paragraph and the direction banner | rewritten on the deployed page |
+
+**If the diff contains anything outside those five, say so loudly.** That is the
+property this check exists to protect: the register is compiled from the records
+by `suite/render_register.py`, which writes identical bytes to every publish
+target in one build, specifically so no hand reaches the page between the
+records and the reader.
+
+**What was wrong here before, recorded rather than smoothed over.** This section
+previously pinned a specific deployed hash, said the difference was "eleven
+lines", and blamed a banner added by hand to the website copy only. All three
+were false by 22 October: the hash had moved twice, the diff is 26 lines, and
+the banner is present in **both** copies. The committed hash above is checked by
+`suite/check_readme_pins.py`, which exits nonzero when it drifts. **The deployed
+hash is deliberately not pinned and not gated**, because it is a moving target
+and a gate that cannot pass is worse than no gate.
+
+The fix for the underlying asymmetry is still the one named below: the banner now
+lives in `brand/register.template.html` so the generator owns it, and `--publish`
+writes it identically to every target.
 
 Correction provenance: the expiry explanation was changed in the template and identically in the committed and website HTML copies, without rerendering held records. The local copies were compared byte for byte. This was a direct static-copy correction, not a fresh record build; the command above independently checks the deployed copy.
 

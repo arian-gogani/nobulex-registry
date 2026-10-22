@@ -48,8 +48,12 @@ def main() -> int:
     checked = 0
 
     # --- pin 1: the committed register's sha256 -----------------------------
+    # Whitespace-tolerant across the whole phrase, because hard line wrapping
+    # can split it. On 22 Oct a rewording put "The" and "committed" on separate
+    # lines; this check correctly exited 2 (CANNOT CHECK) rather than 0, which
+    # is the designed behaviour and the reason that branch exists.
     m = re.search(
-        r"the committed file prints\s*\n?`([0-9a-f]{64})`", text)
+        r"committed\s+file\s+prints\s*`?\s*([0-9a-f]{64})", text)
     if not m:
         print("CANNOT CHECK: no 'the committed file prints `<sha256>`' pin found "
               "in README.md. If that sentence was reworded, reword this check "
