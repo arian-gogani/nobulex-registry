@@ -131,8 +131,17 @@ def main() -> int:
     # the suite printed 395. Three figures for one counter, none current,
     # because nothing compared prose to output. Found 22 Oct by an audit.
     import subprocess
+    # cwd is pinned deliberately. This shells out to the suite to read the case
+    # count rather than trusting prose, which means the number this gate
+    # publishes is whatever that subprocess prints. Without cwd=ROOT the result
+    # would depend on where the checker happened to be invoked from, and a gate
+    # whose verdict is a function of the caller's working directory is not a
+    # gate. An agent reported seeing exactly that divergence on 22 Oct against a
+    # mid-edit tree; it does NOT reproduce at HEAD, where both directories give
+    # exit 0 and 401 cases. Pinned anyway, because the fragility is real even
+    # when it is not currently biting.
     r = subprocess.run([sys.executable, str(ROOT / "suite" / "selftest.py")],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, cwd=str(ROOT))
     m = re.search(r"^(\d+) cases:", r.stdout, re.M)
     if not m:
         print("CANNOT CHECK: suite/selftest.py did not print '<n> cases:'.")
