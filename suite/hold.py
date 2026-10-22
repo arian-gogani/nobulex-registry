@@ -1864,10 +1864,17 @@ def cmd_clear(record_id, dry_run=False):
     val = rec.get("validity") or {}
     val["from"] = now.isoformat()
     val["until"] = (now + timedelta(days=7)).isoformat()
-    val["note"] = ("Queried outside this window the record returns "
-                   "EXPIRED regardless of verdict. The window starts at "
-                   "clearing, not at observation, because the record was "
-                   "not readable by anyone before it cleared.")
+    # Same retracted EXPIRED claim run.py carried. Corrected 22 Oct 2026;
+    # nothing implements expiry at lookup anywhere. The window-start
+    # explanation is kept because it is true and load-bearing.
+    val["note"] = ("This record states a validity window. Nothing "
+                   "enforces it at lookup: the register displays the "
+                   "stored verdict and this deadline unchanged, and a "
+                   "reader past the deadline must treat the verdict as "
+                   "unrefreshed rather than as currently true. The "
+                   "window starts at clearing, not at observation, "
+                   "because the record was not readable by anyone "
+                   "before it cleared.")
     rec["validity"] = val
 
     with io.open(path, "w", encoding="utf-8") as fh:

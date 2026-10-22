@@ -59,8 +59,23 @@ def _validity_block(started, verdict):
         return {
             "from": started.isoformat(),
             "until": (started + timedelta(days=VALIDITY_DAYS)).isoformat(),
-            "note": "Queried outside this window the record returns EXPIRED "
-                    "regardless of verdict.",
+            # This note asserted, until 22 Oct 2026, that "Queried outside
+            # this window the record returns EXPIRED regardless of verdict."
+            # README.md retracted that claim ("Automatic expiry at lookup is
+            # intended behavior, not implemented enforcement in this
+            # register") and the register page already said the opposite
+            # ("does not automatically mark it EXPIRED"). Nothing implements
+            # expiry at lookup anywhere.
+            #
+            # So every record this runner wrote carried a retracted claim into
+            # the one artifact a buyer actually receives. The document was
+            # corrected at the top level and the artifact was not, which is
+            # the worse half: a reader checks the record, not the README.
+            "note": "This record states a validity window. Nothing enforces "
+                    "it at lookup: the register displays the stored verdict "
+                    "and this deadline unchanged, and a reader past the "
+                    "deadline must treat the verdict as unrefreshed rather "
+                    "than as currently true.",
         }
     return {
         "from": started.isoformat(),

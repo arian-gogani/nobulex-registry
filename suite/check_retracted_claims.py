@@ -59,6 +59,12 @@ RETRACTED = [
 CHECKED = [
     Path("brand/register.html"),
     Path("brand/register.template.html"),
+    # The GENERATORS too, not only their output. The EXPIRED claim was
+    # retracted in README.md and kept being written into every new record by
+    # these two files, so checking only the rendered page would have missed
+    # the source that reintroduces it on the next run.
+    Path("suite/run.py"),
+    Path("suite/hold.py"),
 ]
 
 
