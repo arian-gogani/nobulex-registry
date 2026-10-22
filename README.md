@@ -109,6 +109,22 @@ classifiers into the real decision layer, with catch rate, false-block rate
 and policy-evaluation latency printed as measurements. It exits nonzero the
 day any fault stops being caught or any clean case stops being permitted.
 
+**On "pinned by hash", which was false twice over until 22 October 2026.** The
+hash covered only the corpus version, the observation time, the session dates
+and the closes. It did **not** cover the fault cases, so a fault could be
+renamed, altered, added or removed and the printed hash would not move; verified
+by altering a fault in a temp copy and getting a byte-identical value. And
+nothing compared it to anything: it was computed, truncated and printed.
+"Pinned" described a number that could drift freely in both directions.
+
+It now covers every fault and clean case by name and by the subject rows they
+carry, and `gateway/fault_challenge.py` asserts it against a pinned
+`EXPECTED_CORPUS_HASH` and exits nonzero when it moves. Verified load-bearing:
+renaming one fault case produces exit 1 and prints both hashes. The reason this
+matters is narrow and real: every published catch rate, false-block rate and
+indeterminate rate was measured on one specific corpus, and without the pin a
+reader could not tell whether they still were.
+
 **The pilot is now a command rather than a promise.** This sentence described
 something nothing implemented until 21 October 2026: every artifact here ran
 against a fictional offline corpus, so you could not get a number about your own

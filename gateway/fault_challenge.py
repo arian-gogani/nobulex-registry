@@ -47,6 +47,12 @@ from harness import (  # noqa: E402
 
 CORPUS_VERSION = "v1"
 
+# The pinned corpus hash. A reader who runs this script and sees a different
+# value is looking at a different corpus than the one any published number was
+# measured on, which is the whole point of calling the suite fixed. Update this
+# deliberately, in the same commit that changes a case, and say what changed.
+EXPECTED_CORPUS_HASH = "sha256:bb6ed07ca70d31b06b8f2c08fdaebf8a5372ce9792f9363c356396baa6120546"
+
 # A fixed observation time, so the corpus is deterministic and a re-run
 # months from now reproduces byte-identical results.
 AS_OF = datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc)
@@ -189,8 +195,33 @@ def clean_cases():
 
 
 def main():
-    corpus_hash = sha256({"version": CORPUS_VERSION, "as_of": AS_OF.isoformat(),
-                          "sessions": SESSIONS, "closes": CLOSES})
+    # THE CORPUS HASH. README says the suite is "pinned by hash". Until
+    # 22 Oct 2026 that was false twice over.
+    #
+    # First, it covered only version, as_of, sessions and closes. It did NOT
+    # cover the fault cases, so a fault could be renamed, altered, added or
+    # deleted and the hash would not move. Verified by altering a fault in a
+    # temp copy: the printed hash was byte-identical.
+    #
+    # Second, nothing compared it to anything. It was computed, truncated to
+    # 23 characters, printed, and discarded. "Pinned" described a value that
+    # could drift freely in either direction.
+    #
+    # Now it covers the faults and the clean cases by name and by the subject
+    # data they carry, and it is asserted against EXPECTED_CORPUS_HASH below.
+    # Subject rows are stringified so a float repr change shows up rather than
+    # being silently normalised away.
+    corpus_hash = sha256({
+        "version": CORPUS_VERSION,
+        "as_of": AS_OF.isoformat(),
+        "sessions": SESSIONS,
+        "closes": CLOSES,
+        "authority": [str(b) for b in AUTHORITY],
+        "faults": [[name, why, [str(b) for b in subject], expected]
+                   for name, why, subject, expected in fault_cases()],
+        "cleans": [[name, why, [str(b) for b in subject]]
+                   for name, why, subject in clean_cases()],
+    })
     print(f"fault challenge {CORPUS_VERSION}  corpus {corpus_hash[:23]}...")
     print(f"observation time pinned at {AS_OF.isoformat()}  "
           f"policy {POLICY['id']} ({sha256(POLICY)[:23]}...)\n")
@@ -302,6 +333,17 @@ def main():
     p50, p95, p99 = qs[49], qs[94], qs[98]
 
     print()
+    if corpus_hash != EXPECTED_CORPUS_HASH:
+        failures.append(
+            "the corpus has changed. EXPECTED_CORPUS_HASH is\n"
+            f"    {EXPECTED_CORPUS_HASH}\n"
+            "but this corpus hashes to\n"
+            f"    {corpus_hash}\n"
+            "Every published catch rate, false-block rate and indeterminate "
+            "rate was measured on the pinned corpus. If the change is "
+            "intended, update the constant in the same commit and say what "
+            "changed; if it is not, something edited the fixed suite.")
+
     total_decided = sum(evidence_counts.values())
     indet = evidence_counts["INDETERMINATE"]
     indet_rate = (indet / total_decided) if total_decided else 0.0
