@@ -541,6 +541,21 @@ the banner is present in **both** copies. The committed hash above is checked by
 hash is deliberately not pinned and not gated**, because it is a moving target
 and a gate that cannot pass is worse than no gate.
 
+**A third copy disagrees, and it is the one in version control.** On 22 October
+the template was corrected to drop two retracted claims and the live site was
+redeployed with the fix, but `brand/register.html` was never regenerated. So the
+only copy still asserting that Nobulex "is now an inline decision-integrity
+gateway... before the action executes" and that it "proves what happened on the
+other side" is the committed one. Both are retracted in this file's own words.
+
+`suite/check_retracted_claims.py` now gates that, and **it currently exits 1.**
+That is the correct state: the defect is real and the gate is red. It cannot be
+fixed in a public checkout, because `render_register.py` rightly refuses to
+compile a held count from records it cannot read, so the regeneration has to run
+in the tree that holds them. It is deliberately NOT wired into the pre-push hook
+until then, because a gate that blocks every push on a known, separately-tracked
+defect teaches people to bypass gates.
+
 The fix for the underlying asymmetry is still the one named below: the banner now
 lives in `brand/register.template.html` so the generator owns it, and `--publish`
 writes it identically to every target.
