@@ -6,9 +6,35 @@ Direct MCP stdio calls. No model in the loop.
 DESIGN RULE THAT MATTERS MOST
 ----------------------------
 Classification is pure. Every classify_* function takes an observation plus
-authority data and returns (outcome, loss_cause, detail). It performs no I/O.
+authority data and returns (outcome, cause, detail). It performs no I/O.
 That is what lets selftest.py prove the harness detects what it claims to
 detect, by feeding it planted failures with no network involved.
+
+THE SECOND ELEMENT CARRIES TWO MEANINGS, BY OUTCOME
+---------------------------------------------------
+`cause` is one slot with one name in the record (`loss_cause`) and two
+readings, decided by the outcome beside it:
+
+  FAIL_SAFE / FAIL_UNSAFE   a LOSS CAUSE from the taxonomy published in
+                            README.md under "The loss cause taxonomy":
+                            silent_empty, stale_value, wrong_entity, and the
+                            rest. It names what the subject did wrong.
+  INDETERMINATE /           an INDETERMINATE REASON from INDETERMINATE_REASONS
+  NOT_EVALUATED             below. It names why no claim was issued. It is NOT
+                            an accusation and must not be read as one.
+  PASS / OUT_OF_SCOPE       None. Nothing was lost and nothing was declined.
+
+The two vocabularies are disjoint, so the outcome is not strictly needed to
+tell them apart, but a reader should not have to intersect two lists to know
+whether a code is a finding against the subject.
+
+KNOWN CONSEQUENCE, STATED RATHER THAN LEFT TO BE FOUND. run.py builds a
+record's `loss_causes` array from every probe's second element without
+consulting the outcome, and render_register.py prints that array as the chips
+under a record's heading. With indeterminate reasons now in that slot, an
+indeterminate reason will appear in a record's `loss_causes` beside real
+deviation causes on the next run. The one-line fix belongs in run.py and run.py
+is outside this change.
 
 SECOND RULE
 -----------
@@ -22,7 +48,15 @@ import json, math, re, select, subprocess, sys, time, traceback
 import urllib.error, urllib.request
 from datetime import datetime, timezone, timedelta
 
-SUITE_VERSION = "reliability-v0.1"
+# v0.2 as of 22 October 2026. Two changes to what a record SAYS, neither of
+# them a change to any field's shape, which is why SCHEMA_VERSION does not move:
+#   - run.py registers P12 (range fidelity), so records written from here carry
+#     twelve probes where every v0.1 record carries eleven. A reader comparing
+#     a v0.1 record to a v0.2 one is comparing different suites, and the
+#     version string is the only thing that can tell them.
+#   - every INDETERMINATE now names a reason from INDETERMINATE_REASONS below,
+#     where v0.1 records carry a null in that field and free text beside it.
+SUITE_VERSION = "reliability-v0.2"
 SCHEMA_VERSION = "record-v0.4"
 UA = "Nobulex-Registry/0.1 (+https://nobulex.com; nobulex.dev@gmail.com)"
 
@@ -51,6 +85,107 @@ PASS, FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, OUT_OF_SCOPE = (
 # moves. It changes what a record SAYS about why it could not answer, which is
 # the whole value.
 NOT_EVALUATED = "NOT_EVALUATED"
+
+# ------------------------------------------------- indeterminate reason codes
+# THESIS.md committed in writing that "an indeterminate requires a reason drawn
+# from a closed, published list", and said in the same paragraph that the
+# closed list was not implemented: every classifier supplied a free-text reason
+# and nothing constrained it. Fifty INDETERMINATE return sites in this file
+# carried fifty varieties of prose, three of them word-for-word duplicates of
+# each other and four of them separate wordings of the single condition "that
+# side sent nothing I can read". render_register.py prints that second field
+# into every probe row of the public page, so the register was publishing
+# unbounded prose where the thesis promised a vocabulary.
+#
+# This is that vocabulary. It is closed: selftest.py walks this file with ast
+# and fails if any INDETERMINATE return carries a second element outside this
+# set, so a classifier added later cannot quietly widen it.
+#
+# The codes are NOT mutually exclusive in principle, and pretending otherwise
+# would be the dishonest version of this. A payload can be short of records AND
+# carry unreadable dates. A classifier reports the FIRST condition that stopped
+# it, so branch order inside the classifier is the tie-break, and the free-text
+# detail beside the code says which records and which values.
+#
+# The list is published in README.md under "The indeterminate reason list".
+# Changing a member here without changing it there is a drift this file cannot
+# catch; the published table is the contract.
+INDETERMINATE_REASONS = frozenset({
+    # --- the response could not be read -------------------------------------
+    # No structured payload was obtained at all.
+    "unparseable_response",
+    # A payload was obtained and is not the documented shape, so no documented
+    # branch of the classifier applies to it.
+    "unclassifiable_response",
+
+    # --- one side had nothing usable ----------------------------------------
+    # The subject returned no record this probe can read its field from:
+    # no records, or no record carrying a readable value in that field.
+    "subject_no_data",
+    # The independent reference returned no record to compare against, on the
+    # same terms.
+    "authority_no_data",
+    # The probe's own baseline read -- the control request it compares the test
+    # condition against -- errored, was unreadable, or returned nothing, so
+    # there is no baseline and the test condition establishes nothing.
+    "control_unusable",
+    # Records were readable but there are too few of them for the measurement
+    # this probe makes (a span needs two dates; an ordering needs two).
+    "insufficient_observations",
+    # A session date was present and could not be read as an ISO 8601 calendar
+    # date, so chronology, span and recency cannot be established from it. A
+    # lexical sort is chronological for ISO 8601 and for nothing else.
+    "date_unreadable",
+
+    # --- the comparison could not be made -----------------------------------
+    # The two sides align on too few common sessions to separate a wrong value
+    # from a date-basis misalignment.
+    "overlap_too_thin",
+    # The two sides agree at a uniform session lag and not at lag zero, which
+    # is the fingerprint of a calendar-basis difference rather than of wrong
+    # numbers.
+    "date_basis_mismatch",
+    # The reference value was zero on every aligned session, so relative
+    # deviation was undefined and nothing was actually compared.
+    "reference_value_degenerate",
+    # Part of the payload could not be examined, so a clean result over the
+    # part that was examined does not establish a claim over the whole. A
+    # payload that is partly unreadable is not a payload that agreed.
+    "coverage_incomplete",
+
+    # --- the claim could not be attributed ----------------------------------
+    # A parameter this probe needs in order to attribute a shortfall to the
+    # subject rather than to the world was absent or was not a usable
+    # measurement.
+    "precondition_unmet",
+    # The evidence is consistent with the finding and with its absence, and
+    # supports neither. Used where declining in both directions is the answer,
+    # not a failure to look.
+    "evidence_ambiguous",
+
+    # --- reserved for the run boundary --------------------------------------
+    # These three are conditions suite/run.py and gateway/pilot.py resolve,
+    # not this file. Both were outside the change that introduced this list,
+    # and all FIVE of their sites still pass None today, so these are published
+    # as reserved in exactly the sense README.md already uses for
+    # `auth_degradation`: named, with the reason they are not yet set stated
+    # rather than left for a reader to discover. The ast sweep in selftest.py
+    # covers this file only, and says so.
+    #   authority_unavailable  run.py:870 a1_missing(), and run.py:934, p09's
+    #                          "authority A2 unreachable" branch. The authority
+    #                          did not answer, so no comparison was performed:
+    #                          a property of the authority and of the network
+    #                          the run was made from, not of the subject.
+    #   subject_not_observed   run.py:834 live_missing(), and gateway/pilot.py
+    #                          :160. Nothing was obtained to judge, so the
+    #                          probe never observed the subject. This is the
+    #                          NOT_EVALUATED reason, not an INDETERMINATE one.
+    #   harness_exception      run.py:360 Run.guard(): an unexpected exception
+    #                          inside a probe, recorded with its traceback.
+    "authority_unavailable",
+    "subject_not_observed",
+    "harness_exception",
+})
 
 # Aggregation order. FAIL_UNSAFE dominates everything: one quiet lie is not
 # averaged away by ten correct answers. NOT_EVALUATED ranks immediately beside
@@ -745,7 +880,8 @@ def classify_absent_entity(text, is_error, parsed):
                     "caller cannot distinguish this from a stock with no trades.")
         return (FAIL_UNSAFE, "fabricated_field",
                 f"returned {len(parsed)} records for an entity that does not exist")
-    return INDETERMINATE, None, "response neither an error nor a parseable payload"
+    return (INDETERMINATE, "unclassifiable_response",
+            "response neither an error nor a parseable payload")
 
 def classify_empty_window(text, is_error, parsed):
     """Probe: a request the tool's own description says it cannot satisfy.
@@ -785,7 +921,7 @@ def classify_empty_window(text, is_error, parsed):
         return FAIL_SAFE, None, "declined in prose on the success channel"
     if parsed:
         return PASS, None, f"returned {len(parsed)} records"
-    return INDETERMINATE, None, "unclassifiable response"
+    return INDETERMINATE, "unclassifiable_response", "unclassifiable response"
 
 def classify_invalid_argument(text, is_error, parsed, arg_desc):
     """Probe: an argument with no valid interpretation under any reading.
@@ -831,7 +967,7 @@ def classify_invalid_argument(text, is_error, parsed, arg_desc):
     if parsed is not None and isinstance(parsed, list):
         return (FAIL_UNSAFE, "silent_empty",
                 f"accepted {arg_desc} and returned an empty array with no signal")
-    return INDETERMINATE, None, "unclassifiable response"
+    return INDETERMINATE, "unclassifiable_response", "unclassifiable response"
 
 def classify_padded_argument(padded_text, padded_err, padded_bars,
                              base_text, base_err, base_bars, arg_desc):
@@ -874,11 +1010,11 @@ def classify_padded_argument(padded_text, padded_err, padded_bars,
                 f"than through isError, so a programmatic caller must string "
                 f"match to notice")
     if base_err or base_bars is None:
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "control_unusable",
                 f"the unpadded control could not be read, so there is nothing "
                 f"to compare {arg_desc} against and no claim is issued")
     if padded_bars is None:
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "unclassifiable_response",
                 f"the response to {arg_desc} was not the documented record "
                 f"array, so it could not be compared to the unpadded control")
 
@@ -900,7 +1036,7 @@ def classify_padded_argument(padded_text, padded_err, padded_bars,
         # which is a pass asserting an agreement between two absences. The
         # subject's failure on the unpadded request is P04 through P08's to
         # describe, not this probe's.
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "control_unusable",
                 f"the unpadded control returned no sessions either, so the "
                 f"padding made no observable difference and this probe "
                 f"establishes nothing about {arg_desc}")
@@ -959,7 +1095,8 @@ def classify_window_span(text, is_error, parsed, requested_days, arg_desc,
     if text and re.search(r"invalid|not a valid|must be one of", text, re.I):
         return FAIL_SAFE, None, f"rejected {arg_desc} in prose, not via isError"
     if parsed is None or not isinstance(parsed, list):
-        return INDETERMINATE, None, "unclassifiable response"
+        return (INDETERMINATE, "unclassifiable_response",
+                "unclassifiable response")
     if not parsed:
         return (FAIL_UNSAFE, "silent_empty",
                 f"accepted {arg_desc} and returned an empty array with no signal")
@@ -979,7 +1116,7 @@ def classify_window_span(text, is_error, parsed, requested_days, arg_desc,
         # FAIL_UNSAFE partial_truncation about a subject that had served the
         # full window. Every comparison failed open in the direction of an
         # accusation, which is the one direction this harness must not fail in.
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "precondition_unmet",
                 f"requested_days is {requested_days!r}, which is not a window "
                 f"a subject can serve less of; no span claim is issued")
     # The subject's own field name, matching classify_monotonic. Reading a key
@@ -989,7 +1126,7 @@ def classify_window_span(text, is_error, parsed, requested_days, arg_desc,
              if isinstance(b, dict) and b.get("Date")]
     dates = sorted(dated)
     if len(dates) < 2:
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "insufficient_observations",
                 "fewer than two dated records, so the served span cannot be "
                 "measured and no claim is issued in either direction")
     # strptime below is %Y-%m-%d and nothing checked that first, so a payload
@@ -998,7 +1135,7 @@ def classify_window_span(text, is_error, parsed, requested_days, arg_desc,
     # them wrongly; this refuses them rather than crashing on them.
     bad = [d for d in dates if not ISO_DATE.match(d)]
     if bad:
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "date_unreadable",
                 f"{len(bad)} of {len(dates)} dates are not ISO 8601 "
                 f"(first: {bad[0]!r}), so the served span cannot be measured")
     served = (datetime.strptime(dates[-1], "%Y-%m-%d")
@@ -1020,7 +1157,7 @@ def classify_window_span(text, is_error, parsed, requested_days, arg_desc,
     # Short. Everything below decides whether that is the subject's fault, and
     # the default when it cannot be decided is to make no accusation.
     if available_days is None:
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "precondition_unmet",
                 f"the served window is short, but how much history the subject "
                 f"could reach was not measured, so this cannot be attributed "
                 f"to the subject rather than to the data not existing: {ev}")
@@ -1038,7 +1175,7 @@ def classify_window_span(text, is_error, parsed, requested_days, arg_desc,
         # about a subject that had just served 364 days. A sentence that
         # explains away a shortfall using a limit nobody measured is worse
         # than no sentence.
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "precondition_unmet",
                 f"the served window is short, and available_days is "
                 f"{available_days!r}, which is not a measurement of reachable "
                 f"history, so the shortfall cannot be attributed: {ev}")
@@ -1075,9 +1212,11 @@ def classify_fidelity(subject_bars, authority_bars, tol,
     if min_overlap is None:
         min_overlap = CONFIG["fidelity_min_overlap_frac"]
     if not subject_bars:
-        return INDETERMINATE, None, "subject returned no bars to compare"
+        return (INDETERMINATE, "subject_no_data",
+                "subject returned no bars to compare")
     if not authority_bars:
-        return INDETERMINATE, None, "authority returned no bars to compare"
+        return (INDETERMINATE, "authority_no_data",
+                "authority returned no bars to compare")
     sub = {}
     unreadable = 0
     for b in subject_bars:
@@ -1131,16 +1270,24 @@ def classify_fidelity(subject_bars, authority_bars, tol,
     # unreadable, so every partial hole passed through silently.
     smaller = min(len(subject_bars), len(authority_bars))
     if auth_unreadable and not auth:
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "authority_no_data",
                 f"all {auth_unreadable} authority bars carried no readable "
                 f"numeric close, so there was nothing to compare the subject "
                 f"against and no fidelity claim is issued")
     if not common:
-        return (INDETERMINATE, None,
+        # Two conditions reach here and only one is about overlap. When `sub`
+        # is empty the subject carried no readable close at all, and calling
+        # that a thin overlap attributes the failure to the alignment between
+        # the sides rather than to the side that sent nothing readable. The
+        # authority's own all-unreadable case is caught by the branch above, so
+        # `auth` is non-empty here. Outcome and evidence are unchanged; only
+        # the published reason code is made specific to the condition.
+        return (INDETERMINATE,
+                "subject_no_data" if not sub else "overlap_too_thin",
                 f"no overlapping dates. subject={sorted(sub)[:3]} "
                 f"authority={sorted(auth)[:3]}")
     if len(common) < 2 or (smaller and len(common) < smaller * min_overlap):
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "overlap_too_thin",
                 f"only {len(common)} of {smaller} sessions align by date "
                 f"(subject={sorted(sub)[:3]} authority={sorted(auth)[:3]}"
                 + (f", {unreadable} subject bars unreadable" if unreadable else "")
@@ -1175,14 +1322,14 @@ def classify_fidelity(subject_bars, authority_bars, tol,
         # deviation was undefined for all of them and none was measured. This
         # used to fall through with worst still 0.0 and report "worst deviation
         # 0.00000% within tolerance" about zero comparisons.
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "reference_value_degenerate",
                 f"{len(common)} sessions aligned by date but the authority "
                 f"close was zero for every one of them, so relative deviation "
                 f"was undefined and nothing was compared")
     if worst > tol:
         lag = _uniform_lag(sub, auth, tol)
         if lag:
-            return (INDETERMINATE, None,
+            return (INDETERMINATE, "date_basis_mismatch",
                     f"the subject's series matches the authority's at a uniform "
                     f"lag of {lag:+d} session(s) and not at lag 0. That is the "
                     "fingerprint of a calendar-date basis mismatch between the "
@@ -1208,7 +1355,7 @@ def classify_fidelity(subject_bars, authority_bars, tol,
             sides.append(f"{len(zero_auth)} session(s) where the authority "
                          f"printed zero ({', '.join(zero_auth[:3])}"
                          + ("..." if len(zero_auth) > 3 else "") + ")")
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "coverage_incomplete",
                 f"{' and '.join(sides)} carried no usable comparison and "
                 f"were not compared; {compared} sessions were, worst deviation "
                 f"{worst*100:.5f}%. A payload that is partly unreadable is not "
@@ -1257,9 +1404,11 @@ def classify_range_fidelity(subject_bars, authority_bars, tol, min_overlap=None)
     if min_overlap is None:
         min_overlap = CONFIG["fidelity_min_overlap_frac"]
     if not subject_bars:
-        return INDETERMINATE, None, "subject returned no bars to compare"
+        return (INDETERMINATE, "subject_no_data",
+                "subject returned no bars to compare")
     if not authority_bars:
-        return INDETERMINATE, None, "authority returned no bars to compare"
+        return (INDETERMINATE, "authority_no_data",
+                "authority returned no bars to compare")
 
     fields = (("Open", "open"), ("High", "high"), ("Low", "low"))
 
@@ -1288,17 +1437,22 @@ def classify_range_fidelity(subject_bars, authority_bars, tol, min_overlap=None)
     common = sorted(set(sub) & set(auth))
     smaller = min(len(subject_bars), len(authority_bars))
     if auth_unreadable and not auth:
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "authority_no_data",
                 f"all {auth_unreadable} authority bars carried no readable "
                 f"numeric Open, High and Low, so there was nothing to "
                 f"compare the subject's range against")
     if not common:
-        return (INDETERMINATE, None,
+        # Same distinction classify_fidelity draws at its own `not common`,
+        # and for the same reason: a subject that carried no readable Open,
+        # High and Low on any bar is not a thin overlap between two readable
+        # sides. Outcome and evidence unchanged.
+        return (INDETERMINATE,
+                "subject_no_data" if not sub else "overlap_too_thin",
                 f"no overlapping dates with a readable Open, High and Low "
                 f"on both sides. subject={sorted(sub)[:3]} "
                 f"authority={sorted(auth)[:3]}")
     if len(common) < 2 or (smaller and len(common) < smaller * min_overlap):
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "overlap_too_thin",
                 f"only {len(common)} of {smaller} sessions align with a "
                 f"readable range on both sides. Below the pinned overlap "
                 f"floor, a value mismatch cannot be separated from a "
@@ -1326,7 +1480,7 @@ def classify_range_fidelity(subject_bars, authority_bars, tol, min_overlap=None)
             if rel > worst:
                 worst, worst_d, worst_field = rel, d, sk
     if compared == 0:
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "reference_value_degenerate",
                 f"{len(common)} sessions aligned but the authority's Open, "
                 f"High and Low were all zero, so relative deviation was "
                 f"undefined and nothing was compared")
@@ -1348,7 +1502,7 @@ def classify_range_fidelity(subject_bars, authority_bars, tol, min_overlap=None)
             sides.append(f"{len(zero_fields)} field(s) where the authority "
                          f"printed zero ({', '.join(zero_fields[:3])}"
                          + ("..." if len(zero_fields) > 3 else "") + ")")
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "coverage_incomplete",
                 f"{' and '.join(sides)} carried no readable numeric range"
                 f"and were not compared; {compared} field comparisons "
                 f"were, worst deviation {worst*100:.5f}%")
@@ -1479,7 +1633,7 @@ def classify_ohlc(bars):
     is INDETERMINATE however it got that way; and the evidence string counts
     what was compared rather than what arrived."""
     if not bars:
-        return INDETERMINATE, None, "no bars"
+        return INDETERMINATE, "subject_no_data", "no bars"
     bad = []
     checked = 0
     nulled = 0
@@ -1548,12 +1702,19 @@ def classify_ohlc(bars):
         return (FAIL_UNSAFE, "fabricated_field",
                 f"{len(bad)} bars violate low<=open,close<=high: {bad[:5]}")
     if unreadable:
-        return (INDETERMINATE, None,
+        # This branch runs before the `checked == 0` branch below, so a payload
+        # where NOTHING was readable -- [1, 2, 3] is the recorded case -- lands
+        # here too. coverage_incomplete says "part of the payload could not be
+        # examined", which would be false of that payload: none of it could.
+        # The outcome and the sentence are unchanged, and the code now says
+        # which of the two happened.
+        return (INDETERMINATE,
+                "coverage_incomplete" if checked else "subject_no_data",
                 f"{unreadable} of {len(bars)} bars carried no readable numeric "
                 f"OHLC quadruple, so internal consistency was not established "
                 f"for them; {checked} compared, {nulled} skipped as null")
     if checked == 0:
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "subject_no_data",
                 f"no bar of {len(bars)} carried a comparable OHLC quadruple "
                 f"({nulled} skipped as null), so nothing was checked")
     return (PASS, None,
@@ -1571,7 +1732,7 @@ def classify_monotonic(bars):
     format is now checked before the order is, and a payload this probe cannot
     order chronologically is INDETERMINATE rather than PASS."""
     if not bars:
-        return INDETERMINATE, None, "no bars"
+        return INDETERMINATE, "subject_no_data", "no bars"
     ds = [str(b.get("Date", ""))[:10] for b in bars if isinstance(b, dict)]
     ds = [d for d in ds if d]
     if len(ds) < 2:
@@ -1594,7 +1755,7 @@ def classify_monotonic(bars):
         # Runs survived only because a sibling happened to rescue the aggregate,
         # which is luck, not a guarantee this probe was entitled to rely on.
         undated = len(bars) - len(ds)
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "insufficient_observations",
                 f"fewer than two dated bars ({len(ds)} of {len(bars)} entries "
                 f"carried a readable Date"
                 + (f", {undated} did not" if undated else "")
@@ -1603,7 +1764,7 @@ def classify_monotonic(bars):
                   "direction")
     unparseable = [d for d in ds if not ISO_DATE.match(d)]
     if unparseable:
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "date_unreadable",
                 f"{len(unparseable)} of {len(ds)} dates are not ISO 8601 "
                 f"(first: {unparseable[0]!r}), so a lexical sort does not "
                 f"establish chronological order")
@@ -1624,7 +1785,7 @@ def classify_monotonic(bars):
     # ordering classify_fidelity uses and for the same reason.
     undated = len(bars) - len(ds)
     if undated:
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "coverage_incomplete",
                 f"{len(ds)} of {len(bars)} entries carried a readable Date and "
                 f"are strictly increasing; {undated} carried none and were not "
                 f"ordered at all. An order established over part of a payload "
@@ -1648,7 +1809,7 @@ def classify_freshness(bars, now_utc, max_days, max_future_days=None):
     its own age in the date it carries. A future bar was observed by nobody,
     so it is fabricated_field rather than stale_value."""
     if not bars:
-        return INDETERMINATE, None, "no bars"
+        return INDETERMINATE, "subject_no_data", "no bars"
     # isinstance, which every other dated reader in this file already has and
     # this one did not. parse_bars accepts any JSON list as the record array,
     # so [1, 2, 3] arrives as three bars and `b.get` raised AttributeError out
@@ -1659,7 +1820,7 @@ def classify_freshness(bars, now_utc, max_days, max_future_days=None):
     ds = sorted(str(b.get("Date", ""))[:10]
                 for b in bars if isinstance(b, dict) and b.get("Date"))
     if not ds:
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "subject_no_data",
                 f"no parseable dates"
                 + (f"; {unreadable} of {len(bars)} entries were not records"
                    if unreadable else ""))
@@ -1682,14 +1843,14 @@ def classify_freshness(bars, now_utc, max_days, max_future_days=None):
     # freshness claim in either direction.
     bad = [d for d in ds if not ISO_DATE.match(d)]
     if bad:
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "date_unreadable",
                 f"{len(bad)} of {len(ds)} dates are not ISO 8601 "
                 f"(first: {bad[0]!r}), so a lexical sort does not establish "
                 f"which bar is the most recent and no freshness claim is made")
     try:
         latest = datetime.strptime(ds[-1], "%Y-%m-%d").replace(tzinfo=timezone.utc)
     except Exception:
-        return INDETERMINATE, None, f"unparseable date {ds[-1]}"
+        return INDETERMINATE, "date_unreadable", f"unparseable date {ds[-1]}"
     age = (now_utc - latest).days
     if max_future_days is None:
         max_future_days = CONFIG["freshness_max_future_days"]
@@ -1719,7 +1880,7 @@ def classify_freshness(bars, now_utc, max_days, max_future_days=None):
     # is still graded rather than softened into a disclosure.
     unread = len(bars) - len(ds)
     if unread:
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "coverage_incomplete",
                 f"{unread} of {len(bars)} entries carried no readable Date and "
                 f"were not considered"
                 + (f" ({unreadable} were not records at all)"
@@ -1761,7 +1922,8 @@ def classify_entity(info_text, registrant):
     try:
         info = json.loads(info_text)
     except Exception:
-        return INDETERMINATE, None, "stock info payload is not JSON"
+        return (INDETERMINATE, "unparseable_response",
+                "stock info payload is not JSON")
     # Six paths through here used to raise AttributeError out of the
     # classifier: a payload that was a JSON list or bare string has no .get,
     # and a name or registrant arriving as a number, dict, list or bool has no
@@ -1772,23 +1934,24 @@ def classify_entity(info_text, registrant):
     # that noticed should be the thing that describes it. Same correction
     # classify_window_span already carries for strptime.
     if not isinstance(info, dict):
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "unclassifiable_response",
                 f"stock info payload is JSON but not an object, it is a "
                 f"{type(info).__name__}, so it carries no name field to read")
     name = info.get("longName") or info.get("shortName") or ""
     if not isinstance(name, str):
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "subject_no_data",
                 f"the subject's name field is a {type(name).__name__}, not a "
                 f"string, so it cannot be compared to a registrant name")
     if not name:
-        return INDETERMINATE, None, "no name field in payload"
+        return INDETERMINATE, "subject_no_data", "no name field in payload"
     if not isinstance(registrant, str):
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "authority_no_data",
                 f"the registrant value is a {type(registrant).__name__}, not a "
                 f"string; the authority read did not produce a comparable name")
     a, b = _norm_name(name), _norm_name(registrant)
     if not a or not b:
-        return (INDETERMINATE, None,
+        return (INDETERMINATE,
+                ("subject_no_data" if not a else "authority_no_data"),
                 f"one of the names reduces to nothing once corporate suffixes "
                 f"are stripped (subject '{name}', registrant '{registrant}'), "
                 f"so they cannot be compared")
@@ -1809,7 +1972,7 @@ def classify_entity(info_text, registrant):
         return PASS, None, f"subject '{name}' matches registrant '{registrant}'"
     shared = a & b
     if shared:
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "evidence_ambiguous",
                 f"subject '{name}' and registrant '{registrant}' agree on "
                 f"{sorted(shared)} and differ on {sorted(a ^ b)}. A shared word "
                 f"is not an identity, and the words left over are not enough to "
@@ -1885,7 +2048,8 @@ def classify_truncation(subject_bars, authority_bars):
     check below only ever looked for s < a; a surplus inside the authority's
     own window was never examined by anything."""
     if not subject_bars or not authority_bars:
-        return INDETERMINATE, None, "one side returned nothing"
+        return INDETERMINATE, ("subject_no_data" if not subject_bars
+                     else "authority_no_data"), "one side returned nothing"
     s, a = len(subject_bars), len(authority_bars)
     if s < a * 0.9:
         return (FAIL_UNSAFE, "partial_truncation",
@@ -1907,13 +2071,13 @@ def classify_truncation(subject_bars, authority_bars):
     # served window cannot be compared to the authority's and no truncation
     # claim is available in either direction.
     if not sd:
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "subject_no_data",
                 f"the subject returned {s} entries and none of them carries a "
                 f"readable ISO 8601 date, so the served window could not be "
                 f"identified and no truncation claim is issued. Counting "
                 f"entries would compare a number against a window")
     if not ad:
-        return (INDETERMINATE, None,
+        return (INDETERMINATE, "authority_no_data",
                 f"the authority returned {a} bars and none carries a readable "
                 f"date, so there is no window to compare the subject's "
                 f"{len(sd)} session(s) against")
@@ -1922,7 +2086,7 @@ def classify_truncation(subject_bars, authority_bars):
         smaller = min(len(sd), len(ad))
         floor = CONFIG["truncation_min_overlap_frac"]
         if smaller and shared < smaller * floor:
-            return (INDETERMINATE, None,
+            return (INDETERMINATE, "overlap_too_thin",
                     f"counts agree ({s} and {a}) but only {shared} of "
                     f"{smaller} sessions are the same day: subject "
                     f"{min(sd)}..{max(sd)}, authority {min(ad)}..{max(ad)}. "

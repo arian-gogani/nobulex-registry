@@ -40,6 +40,7 @@ sys.path.insert(0, __file__.rsplit("/", 1)[0])
 
 from harness import (
     PASS, FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, OUT_OF_SCOPE,
+    NOT_EVALUATED, INDETERMINATE_REASONS,
     aggregate, parse_bars, CONFIG, next_in_sequence,
     a1_chart, AuthorityUnavailable,
     classify_absent_entity, classify_empty_window, classify_invalid_argument,
@@ -72,9 +73,38 @@ def safe(fn, *a, **kw):
 
 def check(name, got, want_outcome, want_cause, kind):
     """kind is 'detect' (planted failure must be caught) or 'quiet' (clean
-    input must not trip the detector)."""
+    input must not trip the detector).
+
+    THE CLOSED-LIST ASSERTION. THESIS.md commits to "an indeterminate requires
+    a reason drawn from a closed, published list" and said in the same
+    paragraph that the list did not exist. `detail` was unpacked here and never
+    asserted on, and `cause` was None at all fifty of the harness's
+    INDETERMINATE return sites, so the only thing describing an indeterminate
+    was free text that nothing constrained -- and render_register.py publishes
+    that text on every probe row of the public page.
+
+    So an INDETERMINATE or NOT_EVALUATED whose cause is outside
+    INDETERMINATE_REASONS now fails the case on its own, whatever the case
+    expected. A case asserting `want_cause=None` beside INDETERMINATE cannot
+    pass any more, which is the point: that pairing WAS the unimplemented
+    state. Membership is checked separately from the equality check so the
+    report can name the offending value instead of printing two codes side by
+    side and leaving a reader to work out which one is not on the list.
+
+    This covers the conditions this file has a fixture for. It does not cover a
+    classifier added later, which is what the ast sweep at the end of this file
+    is for.
+    """
     outcome, cause, detail = got
     ok = (outcome == want_outcome) and (cause == want_cause)
+    if outcome in (INDETERMINATE, NOT_EVALUATED) \
+            and cause not in INDETERMINATE_REASONS:
+        ok = False
+        detail = (f"CLOSED-LIST VIOLATION: {outcome} carries cause {cause!r}, "
+                  f"which is not in harness.INDETERMINATE_REASONS. Every "
+                  f"indeterminate must name a reason from the list published "
+                  f"in README.md under 'The indeterminate reason list'. "
+                  f"Original detail: {detail}")
     _results.append((ok, kind, name, outcome, cause, want_outcome, want_cause,
                      detail))
     return ok
@@ -395,7 +425,7 @@ p, _ = parse_bars(json.dumps(all_there))
 check("window_span / a shortfall with no control is INDETERMINATE not a finding",
       classify_window_span(json.dumps(all_there), False, p,
                            requested_days=99 * 365, arg_desc="period='99y'"),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "precondition_unmet", "quiet")
 
 # Clean: thirteen years asked for, thirteen years served. Undocumented, and
 # honored anyway. THIS is the case whose absence produced the false verdict.
@@ -421,12 +451,12 @@ _short = [{"Date": d, "Close": 1.0} for d in ("2026-01-01", "2026-03-01")]
 check("window_span / a nan request does not become an accusation",
       classify_window_span("x", False, _full, requested_days=float("nan"),
                            arg_desc="period=?", available_days=365),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "precondition_unmet", "detect")
 
 check("window_span / an infinite request is not a window either",
       classify_window_span("x", False, _full, requested_days=float("inf"),
                            arg_desc="period=?", available_days=365),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "precondition_unmet", "detect")
 
 # available_days is the entire basis for attributing a shortfall. Zero is not
 # a measurement of reachable history, it is the absence of one, and it used to
@@ -437,17 +467,17 @@ check("window_span / an infinite request is not a window either",
 check("window_span / zero reachable history cannot explain a shortfall",
       classify_window_span("x", False, _short, requested_days=365,
                            arg_desc="period=max", available_days=0),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "precondition_unmet", "detect")
 
 check("window_span / negative reachable history cannot explain one either",
       classify_window_span("x", False, _short, requested_days=365,
                            arg_desc="period=max", available_days=-10),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "precondition_unmet", "detect")
 
 check("window_span / a nan availability cannot explain one either",
       classify_window_span("x", False, _short, requested_days=365,
                            arg_desc="period=max", available_days=float("nan")),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "precondition_unmet", "detect")
 
 # must not fire: the probe still has to reach all three real verdicts, or the
 # guards above have turned it into an abstention machine.
@@ -498,7 +528,7 @@ p, _ = parse_bars(json.dumps(one))
 check("window_span / one bar cannot measure a span",
       classify_window_span(json.dumps(one), False, p, requested_days=365,
                            arg_desc="period='1y'"),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "insufficient_observations", "quiet")
 
 # Clean: bars with no readable date field. The regression case for reading a
 # key the payload does not have, which would measure nothing and quietly
@@ -508,7 +538,7 @@ p, _ = parse_bars(json.dumps(undated))
 check("window_span / undated payload resolves to INDETERMINATE not PASS",
       classify_window_span(json.dumps(undated), False, p, requested_days=365,
                            arg_desc="period='1y'"),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "insufficient_observations", "quiet")
 
 # Clean: refusal through the protocol error channel is correct behavior.
 check("window_span / rejected through the error channel",
@@ -546,17 +576,17 @@ check("fidelity / just over tolerance does fire",
 
 check("fidelity / no overlap resolves to INDETERMINATE not PASS",
       classify_fidelity(CLEAN_BARS, auth_bars([("2017-07-14", 99.0)]), TOL),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "overlap_too_thin", "quiet")
 
 check("fidelity / empty subject resolves to INDETERMINATE not PASS",
       classify_fidelity([], CLEAN_AUTH, TOL),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "subject_no_data", "quiet")
 
 # The case that matters most in this file. A date basis off by one session
 # must never be published as a tool returning wrong numbers.
 check("fidelity / off-by-one date basis is INDETERMINATE, not a false accusation",
       classify_fidelity(CLEAN_BARS, SHIFTED_AUTH, TOL),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "date_basis_mismatch", "quiet")
 
 # And the shift guard must not swallow real corruption. Same shifted basis,
 # but the values no longer line up at any lag.
@@ -576,7 +606,7 @@ check("fidelity / thin overlap resolves to INDETERMINATE not a verdict",
           ("2026-07-28", 304.0), ("2026-01-02", 10.0),
           ("2026-01-05", 11.0), ("2026-01-06", 12.0),
           ("2026-01-07", 13.0), ("2026-01-08", 14.0)]), TOL),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "overlap_too_thin", "quiet")
 
 # ================= 4a-ii. range fidelity: Open, High and Low, not just Close
 # classify_fidelity above never looks past Close. A subject that reports the
@@ -628,7 +658,7 @@ check("range fidelity / a subject with no Open/High/Low is not accused",
       classify_range_fidelity(
           [{"Date": b["Date"][:10], "Close": b["Close"]} for b in CLEAN_BARS],
           RANGE_AUTH, TOL),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "subject_no_data", "quiet")
 
 _close_only_auth = [{"date": "2026-07-28", "close": 304.0},
                     {"date": "2026-07-29", "close": 308.0},
@@ -637,7 +667,7 @@ _close_only_auth = [{"date": "2026-07-28", "close": 304.0},
 check("range fidelity / an authority with no Open/High/Low is not treated "
       "as agreement",
       classify_range_fidelity(CLEAN_BARS, _close_only_auth, TOL),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "authority_no_data", "quiet")
 
 check("range fidelity / CLEAN_AUTH's flat Open=High=Low=Close is real range "
       "data, not absent data, and a mismatch against it is caught",
@@ -646,18 +676,18 @@ check("range fidelity / CLEAN_AUTH's flat Open=High=Low=Close is real range "
 
 check("range fidelity / empty subject resolves to INDETERMINATE not PASS",
       classify_range_fidelity([], RANGE_AUTH, TOL),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "subject_no_data", "quiet")
 
 check("range fidelity / no overlap resolves to INDETERMINATE not PASS",
       classify_range_fidelity(CLEAN_BARS, [
           {"date": "2017-07-14", "open": 99.0, "high": 99.5, "low": 98.5,
            "close": 99.0}], TOL),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "overlap_too_thin", "quiet")
 
 _zero_range_auth = [dict(b, open=0.0, high=0.0, low=0.0) for b in RANGE_AUTH]
 check("range fidelity / an authority range of zero is undefined, not a pass",
       classify_range_fidelity(CLEAN_BARS, _zero_range_auth, TOL),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "reference_value_degenerate", "quiet")
 
 # A PARTIALLY zeroed authority, which is the dangerous one and was not
 # covered. The all-zero cases above fired because `compared` reached zero and
@@ -680,7 +710,7 @@ _fabricated[2] = dict(_fabricated[2], Close=5000.0)
 check("fidelity / one zeroed authority session is not a free pass for the "
       "subject's value on it",
       classify_fidelity(_fabricated, _one_zero_auth, TOL),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "coverage_incomplete", "detect")
 
 _one_zero_range = [dict(b) for b in RANGE_AUTH]
 _one_zero_range[2] = dict(_one_zero_range[2], open=0.0, high=0.0, low=0.0)
@@ -689,18 +719,28 @@ _fab_range[2] = dict(_fab_range[2], Open=4990.0, High=5010.0, Low=4980.0)
 check("range fidelity / one zeroed authority session is not a free pass for "
       "the subject's range on it",
       classify_range_fidelity(_fab_range, _one_zero_range, TOL),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "coverage_incomplete", "detect")
 
 # And the skip must not be silent even when the subject is faithful there.
 # A reader is entitled to know the comparison was thinner than the session
 # count suggests.
 _faithful_over_zero = classify_range_fidelity(CLEAN_BARS, _one_zero_range, TOL)
+# Split into two cases. This used to be one, with the boolean "is the zeroed
+# field named in the evidence?" packed into the tuple's SECOND slot, which is
+# the cause slot. That slot now carries the indeterminate reason code and is
+# asserted against the published closed list, so a boolean sitting in it would
+# fail the closed-list check for a reason that has nothing to do with what the
+# case tests. Asserting the code and the disclosure separately also asserts
+# more than the packed version did.
+check("range fidelity / a faithful subject over a zeroed authority field is "
+      "not a clean pass",
+      _faithful_over_zero,
+      INDETERMINATE, "coverage_incomplete", "quiet")
 check("range fidelity / a zeroed authority field is named in the evidence, "
       "not quietly dropped from the count",
-      (_faithful_over_zero[0],
-       "printed zero" in str(_faithful_over_zero[2]),
-       _faithful_over_zero[2]),
-      INDETERMINATE, True, "quiet")
+      ("named" if "printed zero" in str(_faithful_over_zero[2])
+       else "omitted", None, _faithful_over_zero[2]),
+      "named", None, "quiet")
 
 # ============================ 4b. a padded argument is not an unhonorable one
 # P11 sent period='1mo ' and judged the answer with classify_invalid_argument,
@@ -750,7 +790,7 @@ check("padded / serving a shifted window of the same size is one too",
 check("padded / an unreadable control issues no claim in either direction",
       classify_padded_argument(_PJ(_pbars(23)), False, _pbars(23),
                                None, False, None, _ARG),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "control_unusable", "quiet")
 
 check("padded / a prose refusal is FAIL_SAFE, not a silent fallback",
       classify_padded_argument("invalid period", False, None,
@@ -807,15 +847,15 @@ check("monotonic / clean ordering passes",
 # bytes both said INDETERMINATE.
 check("monotonic / entries that are not records are INDETERMINATE not OUT_OF_SCOPE",
       classify_monotonic([1, 2, 3, 4]),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "insufficient_observations", "detect")
 
 check("monotonic / a bar carrying no Date is not out of scope",
       classify_monotonic([{"Date": "2026-09-12"}, {"Close": 1.0}]),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "insufficient_observations", "detect")
 
 check("monotonic / one dated bar establishes no ordering",
       classify_monotonic([{"Date": "2026-09-12"}]),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "insufficient_observations", "detect")
 
 # The whole point of the tier change: this verdict has to be able to move a run.
 _results.append((aggregate(["PASS", classify_monotonic([1, 2, 3, 4])[0],
@@ -856,15 +896,15 @@ _OV = CONFIG["fidelity_min_overlap_frac"]
 
 check("fidelity / every close nan is not a clean comparison, it is no comparison",
       classify_fidelity(_sub4([NAN] * 4), _auth4, _TOL, _OV),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "subject_no_data", "detect")
 
 check("fidelity / a single nan close is not silently dropped into a pass",
       classify_fidelity(_sub4([100.0, NAN, 100.0, 100.0]), _auth4, _TOL, _OV),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "coverage_incomplete", "detect")
 
 check("fidelity / an infinite close is not a readable price",
       classify_fidelity(_sub4([100.0, INF, 100.0, 100.0]), _auth4, _TOL, _OV),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "coverage_incomplete", "detect")
 
 # must not fire: the probe still has to catch a real deviation, and still has
 # to pass a payload that genuinely matches. A guard that resolves everything
@@ -880,13 +920,13 @@ _auth_nan = [{"date": d, "close": NAN} for d in
              ("2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04")]
 check("fidelity / an authority column of nan is nothing to compare against",
       classify_fidelity(_sub4([100.0] * 4), _auth_nan, _TOL, _OV),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "authority_no_data", "detect")
 
 _auth_inf = [{"date": d, "close": INF} for d in
              ("2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04")]
 check("fidelity / an infinite authority close is not a readable price either",
       classify_fidelity(_sub4([100.0] * 4), _auth_inf, _TOL, _OV),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "authority_no_data", "detect")
 
 check("fidelity / a real 50% deviation is still caught",
       classify_fidelity(_sub4([100.0, 150.0, 100.0, 100.0]), _auth4, _TOL, _OV),
@@ -902,11 +942,11 @@ def _q(o, h, l, c):
 
 check("ohlc / an infinite high satisfies every inequality and is still unreadable",
       classify_ohlc(_q(100.0, INF, 99.0, 100.5)),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "subject_no_data", "detect")
 
 check("ohlc / a nan quadruple is unreadable, not an inequality violation",
       classify_ohlc(_q(NAN, NAN, NAN, NAN)),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "subject_no_data", "detect")
 
 check("ohlc / a clean quadruple still passes",
       classify_ohlc(_q(100.0, 101.0, 99.0, 100.5)),
@@ -945,11 +985,11 @@ _AUTH100 = _auth_span("2026-05-01", 100)
 
 check("truncation / one shared day out of a hundred is not a clean window",
       classify_truncation(_span("2026-01-22", 100), _AUTH100),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "overlap_too_thin", "detect")
 
 check("truncation / a fifth of the window shared is still not a result",
       classify_truncation(_span("2026-02-10", 100), _AUTH100),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "overlap_too_thin", "detect")
 
 # Correction: this fixture used to require PASS despite missing authority
 # sessions. Sufficient overlap allows comparison; it does not prove coverage.
@@ -974,20 +1014,20 @@ check("truncation / an identical window still passes",
 _A4 = _auth_span("2026-09-01", 4)
 
 check("truncation / a list of integers is not four sessions",
-      classify_truncation([1, 2, 3, 4], _A4), INDETERMINATE, None, "detect")
+      classify_truncation([1, 2, 3, 4], _A4), INDETERMINATE, "subject_no_data", "detect")
 
 check("truncation / a list of nulls is not four sessions either",
-      classify_truncation([None] * 4, _A4), INDETERMINATE, None, "detect")
+      classify_truncation([None] * 4, _A4), INDETERMINATE, "subject_no_data", "detect")
 
 check("truncation / bars with no readable date support no window claim",
       classify_truncation([{"Date": "09/0%d/2026" % i} for i in range(1, 5)],
                           _A4),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "subject_no_data", "detect")
 
 check("truncation / an undatable authority payload is not a baseline",
       classify_truncation(_span("2026-09-01", 4),
                           [{"close": 100.0} for _ in range(4)]),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "authority_no_data", "detect")
 
 check("truncation / a readable pair is still judged, not abstained on",
       classify_truncation(_span("2026-09-01", 4), _A4), PASS, None, "quiet")
@@ -1099,7 +1139,7 @@ check("freshness / three days old is inside the window",
 check("freshness / undated payload resolves to INDETERMINATE not PASS",
       classify_freshness([{"Open": 1}], NOW,
                          CONFIG["freshness_max_calendar_days"]),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "subject_no_data", "quiet")
 
 # A bar dated after the run. `age` is signed, so before this was graded the
 # comparison `age > max_days` was false for every future date and the probe
@@ -1123,7 +1163,7 @@ _unpadded = [{"Date": "2026-08-01"}, {"Date": "2026-08-02"}, {"Date": "2026-1-5"
 check("freshness / an unpadded date sorted to the wrong end is not staleness",
       classify_freshness(_unpadded, NOW,
                          CONFIG["freshness_max_calendar_days"]),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "date_unreadable", "detect")
 
 # And the other direction: a date this probe cannot read at all sorted to the
 # front and was silently dropped, so the probe passed while reporting on a
@@ -1131,7 +1171,7 @@ check("freshness / an unpadded date sorted to the wrong end is not staleness",
 _slash = [{"Date": "2026-08-02"}, {"Date": "08/02/2026"}]
 check("freshness / an unreadable date is not silently dropped into a pass",
       classify_freshness(_slash, NOW, CONFIG["freshness_max_calendar_days"]),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "date_unreadable", "detect")
 
 # must not fire: a full ISO timestamp truncates to an ISO date and is fine,
 # and both real verdicts still have to be reachable.
@@ -1191,13 +1231,13 @@ _results.append((_fut_cause == "fabricated_field", "detect",
 _fr_mixed = [1, 2, 3, {"Date": "2026-08-02"}]
 check("freshness / unreadable entries beside a fresh bar are not a pass",
       classify_freshness(_fr_mixed, NOW, CONFIG["freshness_max_calendar_days"]),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "coverage_incomplete", "detect")
 
 _fr_undated = [{"Open": 1}, {"Date": "2026-08-02"}]
 check("freshness / a record carrying no Date is disclosed, not dropped",
       classify_freshness(_fr_undated, NOW,
                          CONFIG["freshness_max_calendar_days"]),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "coverage_incomplete", "detect")
 
 # must not fire, and the ordering that makes it must-not-fire matters: the
 # unreadable disclosure is counted AFTER the two FAIL_UNSAFE checks, so a stale
@@ -1228,23 +1268,23 @@ check("freshness / a fully readable recent payload still passes",
 # doing something worth describing.
 check("entity / a numeric name field is described, not raised on",
       classify_entity(json.dumps({"longName": 12345}), "Apple Inc."),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "subject_no_data", "detect")
 
 check("entity / a structured name field is described, not raised on",
       classify_entity(json.dumps({"longName": {"x": 1}}), "Apple Inc."),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "subject_no_data", "detect")
 
 check("entity / a payload that is a list carries no name field to read",
       classify_entity(json.dumps([{"longName": "Apple"}]), "Apple Inc."),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "unclassifiable_response", "detect")
 
 check("entity / a payload that is a bare string carries none either",
       classify_entity('"just a string"', "Apple Inc."),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "unclassifiable_response", "detect")
 
 check("entity / a non-string registrant is the authority's failure, not the subject's",
       classify_entity(json.dumps({"longName": "Apple Inc."}), 12345),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "authority_no_data", "detect")
 
 # must not fire: the probe still has to reach both real verdicts, and a null
 # longName still has to fall through to shortName.
@@ -1274,7 +1314,7 @@ check("entity / ticker absent from the registrant file is OUT_OF_SCOPE",
 
 check("entity / unparseable payload resolves to INDETERMINATE not PASS",
       classify_entity("<html>error</html>", "Apple Inc."),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "unparseable_response", "quiet")
 
 # A shared word is not an identity. `if a & b` used to PASS on one token in
 # common, and containment used to PASS on a registrant name that reduces to a
@@ -1285,21 +1325,21 @@ check("entity / unparseable payload resolves to INDETERMINATE not PASS",
 check("entity / a namesake with a longer name is not affirmed",
       classify_entity(json.dumps({"longName": "Apple Hospitality REIT, Inc."}),
                       "Apple Inc."),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "evidence_ambiguous", "detect")
 
 check("entity / a namesake with a different second word is not affirmed",
       classify_entity(json.dumps({"longName": "Ford Foundation"}),
                       "Ford Motor Company"),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "evidence_ambiguous", "detect")
 
 check("entity / a shared word is not enough to accuse of wrong_entity either",
       classify_entity(json.dumps({"longName": "First National"}),
                       "National Grid plc"),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "evidence_ambiguous", "detect")
 
 check("entity / names that reduce to nothing cannot be compared",
       classify_entity(json.dumps({"longName": "Inc."}), "Corp"),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "subject_no_data", "detect")
 
 # The other half: vendor decoration on a security name must not read as a
 # different registrant, or the probe trades a false clear for a false alarm.
@@ -1412,34 +1452,44 @@ check("truncation / equal counts pass",
 
 check("ohlc / a payload of integers is not a set of consistent bars",
       classify_ohlc([1, 2, 3]),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "subject_no_data", "quiet")
 
 check("ohlc / string prices where '10' <= '9' hides a Low above its High",
       classify_ohlc([{"Date": "2026-09-01", "Open": "10", "High": "9",
                       "Low": "10", "Close": "9"}]),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "subject_no_data", "quiet")
 
 _missing_key = [dict(CLEAN_BARS[0]),
                 {"Date": "2026-09-02", "Opn": 5.0, "High": 6.0,
                  "Low": 40.0, "Close": 5.5}]
 check("ohlc / a misspelled key does not make the bar consistent",
       classify_ohlc(_missing_key),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "coverage_incomplete", "quiet")
 
 check("ohlc / every price null means nothing was compared, not that all agreed",
       classify_ohlc([{"Date": "2026-09-0%d" % i, "Open": None, "High": None,
                       "Low": None, "Close": None} for i in range(1, 6)]),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "subject_no_data", "quiet")
 
 check("monotonic / a lexical sort does not order non-ISO dates",
       classify_monotonic([{"Date": "01/05/2026", "Close": 1},
                           {"Date": "02/03/2025", "Close": 2}]),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "date_unreadable", "quiet")
 
+# The authority side of this case was built with the SUBJECT's key spelling,
+# `Date`. _auth_date reads `date` and falls back to `ts`, so every authority bar
+# raised KeyError inside _iso_dates, was skipped, and the classifier returned
+# INDETERMINATE from its `not ad` branch -- "the authority returned 5 bars and
+# none carries a readable date" -- without ever comparing the two windows this
+# case is named for. The case passed on the right outcome for the wrong reason,
+# which is the exact defect _iso_dates' own docstring describes, reappearing in
+# a test for it. Closing the reason to a published list is what surfaced it: the
+# code came back authority_no_data where the case says non-overlapping windows.
 check("truncation / equal counts over non-overlapping windows is not a pass",
       classify_truncation([{"Date": "1999-01-0%d" % i} for i in range(1, 6)],
-                          [{"Date": "2026-09-0%d" % i} for i in range(1, 6)]),
-      INDETERMINATE, None, "quiet")
+                          auth_bars([("2026-09-0%d" % i, 1.0)
+                                     for i in range(1, 6)])),
+      INDETERMINATE, "overlap_too_thin", "quiet")
 
 # ================================= 10c. the publication gate fails closed
 # These do not test a classifier. They test the two predicates that decide
@@ -2996,6 +3046,28 @@ import run as _run
 gate("outcome / NOT_EVALUATED is held like the other non-answers",
      lambda: _harness.NOT_EVALUATED in _run.REQUIRES_REPLY, True, "detect")
 
+# P12, range fidelity, was registered in run.py's main() after harness.py had
+# already carried classify_range_fidelity for weeks with NO CALL SITE: fourteen
+# cases in this file asserted it catches a fabricated Open, High and Low, and no
+# published record carried the check. These three assert the wiring itself,
+# read out of main()'s source rather than by running a subject, because a probe
+# that is tested and unregistered is coverage this suite is not providing.
+import inspect as _inspect, re as _re2
+_main_src = _re2.sub(r"\s+", " ", _inspect.getsource(_run.main))
+
+gate("record / run.py registers a range-fidelity probe at all",
+     lambda: 'r.guard("P12"' in _main_src, True, "detect")
+
+gate("record / P12 compares the subject's range against authority A1 at the "
+     "pinned tolerance, not at one of its own",
+     lambda: 'classify_range_fidelity(live_bars, a1["bars"], '
+             'CONFIG["price_tolerance_rel"])' in _main_src, True, "detect")
+
+gate("record / the shared-pull note names every probe that reads it, P12 "
+     "included",
+     lambda: "P04 through P08 and P12 all read that one" in _main_src,
+     True, "detect")
+
 # Named for what it wraps rather than _note, which is taken. The page-note
 # fixture up in section 10c is called _note, and this file is one module, so
 # the second definition replaced the first from this line to the end. It was
@@ -3090,7 +3162,7 @@ _fsub = [bar(d, 100.0, 100.0, 100.0, 100.0) for d in _fdays]
 check("fidelity / an authority close of zero everywhere is not a pass",
       classify_fidelity(_fsub,
                         auth_bars([(d, 0.0) for d in _fdays]), TOL),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "reference_value_degenerate", "quiet")
 
 _fmixed = [dict(b) for b in _fsub]
 for _b in _fmixed[:3]:
@@ -3098,7 +3170,7 @@ for _b in _fmixed[:3]:
 check("fidelity / dropping unreadable closes must not improve the overlap",
       classify_fidelity(_fmixed,
                         auth_bars([(d, 100.0) for d in _fdays]), TOL),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "overlap_too_thin", "quiet")
 
 check("fidelity / a fully readable matching payload still passes",
       classify_fidelity(_fsub, auth_bars([(d, 100.0) for d in _fdays]), TOL),
@@ -3134,18 +3206,18 @@ _aauth_one = [{"date": d, "ts": None, "open": None, "high": None,
 
 check("fidelity / an authority hole must not publish a PASS over corruption",
       classify_fidelity(_asub_bad, _aauth_holed, TOL),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "overlap_too_thin", "detect")
 
 check("fidelity / a clean subject is not cleared by an authority it could not read",
       classify_fidelity(_asub_ok, _aauth_holed, TOL),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "overlap_too_thin", "detect")
 
 # One unreadable authority close. The subject side already returns
 # INDETERMINATE for exactly one unreadable bar out of ten; the authority side
 # returned PASS, and a comparison is only as readable as its weaker half.
 check("fidelity / one unreadable authority close is disclosed, not dropped",
       classify_fidelity(_asub_ok, _aauth_one, TOL),
-      INDETERMINATE, None, "detect")
+      INDETERMINATE, "coverage_incomplete", "detect")
 
 _results.append((classify_fidelity(_asub_ok, _aauth_one, TOL)[0]
                  == classify_fidelity(
@@ -3180,11 +3252,11 @@ _wsbad = json.dumps([{"Date": "01/05/2026", "Close": 1},
 _wsbadp, _ = parse_bars(_wsbad)
 check("window_span / non-ISO dates are refused, not fed to strptime",
       safe(classify_window_span, _wsbad, False, _wsbadp, 365, "period='1y'"),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "date_unreadable", "quiet")
 
 check("window_span / a zero-length request is not a window to fall short of",
       safe(classify_window_span, _wsiso, False, _wsp, 0, "period='0d'"),
-      INDETERMINATE, None, "quiet")
+      INDETERMINATE, "precondition_unmet", "quiet")
 
 check("window_span / a real request over ISO dates still passes",
       classify_window_span(_wsiso, False, _wsp, 200, "period='1y'"),
@@ -3885,6 +3957,140 @@ for _kind in ("missing-dir", "file", "missing-entry", "nested", "absolute"):
     gate(f"subject path / {_kind}",
          lambda k=_kind: _subject_path_preflight(k), True,
          "quiet" if _kind in ("nested", "absolute") else "detect")
+
+# ============ the indeterminate reason list is closed, and published
+# THESIS.md: "an indeterminate requires a reason drawn from a closed,
+# published list". Two words in that sentence are load bearing and neither is
+# checkable by the per-case assertion in check() above.
+#
+# CLOSED. check() only sees conditions this file has a fixture for. A
+# classifier added next month, or a new branch inside an existing one, could
+# return INDETERMINATE with None or with a misspelled code and nothing here
+# would notice, which is how the free-text state lasted as long as it did. So
+# the first gate walks harness.py itself.
+#
+# PUBLISHED. A closed list nobody can read is not a published list. The second
+# gate compares the frozenset against the table in README.md, so a code added
+# in one place and not the other goes red rather than shipping a register whose
+# vocabulary is wider than its documentation.
+
+def _indeterminate_reason_sweep():
+    """Offending INDETERMINATE returns in harness.py, as readable strings.
+
+    Returns [] when every one of them names a published reason. A sweep that
+    answered True or False would say something is wrong without saying where,
+    so the failures carry file, line, function and the offending value.
+
+    SCOPE, STATED BECAUSE IT IS NARROWER THAN THE COMMITMENT. harness.py only.
+    Five indeterminates are resolved elsewhere and all five still pass None:
+    run.py:870 a1_missing(), run.py:934 p09's A2-unreachable branch, run.py:834
+    live_missing(), run.py:360 Run.guard()'s exception boundary, and
+    gateway/pilot.py:160. Codes are reserved for all five in
+    INDETERMINATE_REASONS. Extending this sweep to those files is the next step
+    and would fail today, which is the honest reason it is not extended here
+    rather than a reason to leave the gap out of the report.
+    """
+    import ast as _ast
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "harness.py")
+    with open(path) as fh:
+        tree = _ast.parse(fh.read(), filename=path)
+
+    def literals(node):
+        """Every reason code a return's second element can produce, or None if
+        that cannot be read out of the source.
+
+        A plain string literal is one code. A conditional expression is two,
+        and three sites use one deliberately: a branch reachable when either
+        side is the one with nothing readable names the side rather than
+        picking a vaguer code that covers both. Anything else -- None, a bare
+        name, a call, an f-string -- is unresolvable by inspection, and a
+        reason code that cannot be read out of the source cannot be checked
+        against a published list, so it is reported.
+        """
+        if isinstance(node, _ast.Constant) and isinstance(node.value, str):
+            return [node.value]
+        if isinstance(node, _ast.IfExp):
+            out = []
+            for side in (node.body, node.orelse):
+                got = literals(side)
+                if got is None:
+                    return None
+                out.extend(got)
+            return out
+        return None
+
+    bad = []
+
+    class _Sweep(_ast.NodeVisitor):
+        def __init__(self):
+            self.stack = []
+
+        def visit_FunctionDef(self, node):
+            self.stack.append(node.name)
+            self.generic_visit(node)
+            self.stack.pop()
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_Return(self, node):
+            v = node.value
+            if isinstance(v, _ast.Tuple) and v.elts \
+                    and isinstance(v.elts[0], _ast.Name) \
+                    and v.elts[0].id in ("INDETERMINATE", "NOT_EVALUATED"):
+                where = "harness.py:%d in %s()" % (
+                    node.lineno, self.stack[-1] if self.stack else "?")
+                if len(v.elts) < 2:
+                    bad.append("%s: returns %s with no reason at all"
+                               % (where, v.elts[0].id))
+                else:
+                    codes = literals(v.elts[1])
+                    if codes is None:
+                        bad.append(
+                            "%s: reason is %s, which is not a string literal "
+                            "this sweep can check against the published list"
+                            % (where, _ast.unparse(v.elts[1])))
+                    else:
+                        for c in codes:
+                            if c not in INDETERMINATE_REASONS:
+                                bad.append("%s: %r is not a published reason"
+                                           % (where, c))
+            self.generic_visit(node)
+
+    _Sweep().visit(tree)
+    return sorted(bad)
+
+
+def _reason_list_drift():
+    """Differences between INDETERMINATE_REASONS and the README table."""
+    import re as _re
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "README.md")
+    with open(path) as fh:
+        text = fh.read()
+    head = "## The indeterminate reason list"
+    if head not in text:
+        return ["README.md has no '%s' heading, so the list is not published"
+                % head]
+    body = text.split(head, 1)[1].split("\n## ", 1)[0]
+    published = set(_re.findall(r"^\| `([a-z_]+)` \|", body, _re.M))
+    if not published:
+        return ["README.md's '%s' section has no `code` table rows" % head]
+    out = ["%s is in harness.py and not published in README.md" % c
+           for c in sorted(INDETERMINATE_REASONS - published)]
+    out += ["%s is published in README.md and not in harness.py" % c
+            for c in sorted(published - INDETERMINATE_REASONS)]
+    return out
+
+
+gate("closed list / every INDETERMINATE return in harness.py names a reason "
+     "from the published list",
+     _indeterminate_reason_sweep, [], "detect")
+
+gate("closed list / harness.py and the README table name the same reasons",
+     _reason_list_drift, [], "detect")
+
 
 # ============================================================ report
 def main():

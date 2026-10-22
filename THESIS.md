@@ -154,8 +154,28 @@ load-bearing by lowering it below the measured rate and confirming the run
 fails.
 
 The other half of this commitment, a closed published list of indeterminate
-reasons, is **still not implemented**. Each classifier supplies a free-text
-reason today. That is stated here rather than left for a reader to discover.
+reasons, was **implemented on 22 October 2026** and is now enforced. All 50
+indeterminate return sites in `suite/harness.py` carry a code from a
+sixteen-member frozen set, thirteen of which are emitted and three reserved;
+the set is published in README beside the loss-cause taxonomy, in the same
+format. Two gates hold it: a per-case assertion that fails on any code outside
+the set, and an `ast` sweep over `harness.py` that catches a newly added
+classifier returning a code the per-case assertion has no fixture for. Both are
+mutation-verified, including the drift case where a code exists in the harness
+and is missing from README.
+
+Three things that bucketing exposed, recorded because they are the reason to do
+this rather than side effects of it. `classify_ohlc` ran its unreadable branch
+before its zero-checked branch, so a payload where **nothing** was readable was
+reporting a code that asserts part of it was. `classify_fidelity` and
+`classify_range_fidelity` guarded the authority side for all-unreadable and not
+the subject side, so a subject that sent no readable close was attributed to the
+alignment between the two sides rather than to the side that sent nothing. And a
+selftest case named for non-overlapping windows was building its authority with
+the subject's key spelling, so every authority bar raised and the case passed
+from an empty-authority branch without ever comparing the two windows it names.
+Closing the reason to a published list is what made all three visible: a free
+string can be vaguely true, and a code cannot.
 
 **Detection and special casing.** Executing from outside the operator's control domain does not stop the operator from recognising the verifier and behaving differently for it. This is the defeat device problem, and it is the canonical attack on every independent testing regime that has ever existed. The mitigations are operational rather than cryptographic: probes that are not attributable, access acquired through ordinary commercial channels rather than a disclosed testing relationship, randomised timing and request identity, and periodic re execution under a fresh identity to compare against the attributed result. A divergence between attributed and unattributed runs is not a nuisance. It is the most serious finding this system can produce, and it is reportable as such.
 

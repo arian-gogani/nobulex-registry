@@ -19,8 +19,13 @@ def main():
         ("Matching window", matching, (PASS, None)),
         ("Two sessions silently missing", matching[:3],
          (FAIL_UNSAFE, "partial_truncation")),
+        # The cause slot carried None until 22 Oct 2026, when the 50
+        # indeterminate sites in harness.py were closed to a published list.
+        # "overlap_too_thin" is the right code here and says more than None did:
+        # the two windows do not overlap enough to compare, which is a statement
+        # about the alignment of the two sides rather than about either one.
         ("Same count, entirely different dates", wrong_window,
-         (INDETERMINATE, None)),
+         (INDETERMINATE, "overlap_too_thin")),
     ]
     print("Fictional fixtures. No network, live tool, or registry attestation.\n")
     errors = 0

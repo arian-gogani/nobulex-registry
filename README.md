@@ -166,7 +166,7 @@ verbatim in the file rather than described, so the comparison is reproducible
 rather than asserted. Two rows exist to show the fix is not blunt: `FAIL_UNSAFE`
 still dominates and `FAIL_SAFE` still escalates rather than blocking.
 
-It survived 395 suite cases and seventeen self-test files. That is the point of
+It survived 401 suite cases and seventeen self-test files. That is the point of
 publishing it.
 
 ```bash
@@ -188,7 +188,7 @@ authority's own covered window that the authority does not carry is now
 `FAIL_UNSAFE` with cause `surplus_session`, bounded to inside the window on
 purpose so a session past the authority's own latest date (which may just
 be a session the authority hasn't caught up to yet) is not flagged the same
-way. Pinned in `suite/selftest.py` (395 cases, run it), mutation-tested
+way. Pinned in `suite/selftest.py` (401 cases, run it), mutation-tested
 by removing the check and confirming the exploit reopens, and recorded in
 the corpus as `fabricated_session`.
 
@@ -204,7 +204,7 @@ real Open/High/Low instead of dropping them, and `subject_from_authority()`
 mirrors them faithfully instead of flattening all three to Close, which is
 what let this gap go unnoticed by the live demo for as long as it did.
 Verified live: a 2% price corruption is now caught independently by both
-`fidelity` and `range_fidelity`. Pinned in `suite/selftest.py` (395 cases
+`fidelity` and `range_fidelity`. Pinned in `suite/selftest.py` (401 cases
 now), mutation-tested, and recorded in the fault corpus as
 `fabricated_range`.
 
@@ -441,6 +441,45 @@ Each code is designed to be decidable from a run artifact without a human judgme
 Seven of the eight are decidable that way and the suite emits them. `auth_degradation` is not, which is why it is reserved rather than implemented. Deciding it requires knowing which tier the subject was entitled to, and a run artifact does not carry that: a shorter history is indistinguishable from a tier that was always shorter. What the suite can see, it already grades as `partial_truncation`, which describes the symptom without asserting a cause it cannot establish. Naming the reason a code is absent is more useful than quietly shipping seven under a heading that says eight.
 
 The accumulated history of which subjects fail in which ways is the part of this that cannot be reconstructed later. Anyone can copy the taxonomy in an afternoon. Nobody can copy three years of observations they did not make.
+
+---
+
+## The indeterminate reason list
+
+The taxonomy above says what a subject did wrong. This one says why no claim was issued, and it exists for a reason THESIS.md states as an attack on this project rather than as a feature of it. Precommitting runs stops a verifier from suppressing an unfavourable pass or fail. It does nothing about an unbounded indeterminate, which would let any awkward result be filed as undecidable. So an indeterminate requires a reason drawn from a closed, published list. This is that list.
+
+It was not implemented until 22 October 2026, and THESIS.md said so in writing for two days before it was. Fifty return sites in `suite/harness.py` resolved INDETERMINATE and every one of them put a null in the reason field and free prose beside it. Three of the fifty said "unclassifiable response" word for word. Four more were four different wordings of one condition: "no bars", "subject returned no bars to compare", "authority returned no bars to compare". That prose is published, not internal, because `suite/render_register.py` prints it into every probe row of the register. So the public page was carrying fifty varieties of prose where this document promised a vocabulary.
+
+`v0` covers:
+
+| Code | Why no claim was issued |
+|---|---|
+| `unparseable_response` | No structured payload was obtained at all. |
+| `unclassifiable_response` | A payload was obtained and is not the documented shape, so no documented branch of the classifier applies. |
+| `subject_no_data` | The subject returned no record the probe can read its field from: no records, or no record carrying a readable value in that field. |
+| `authority_no_data` | The independent authority returned no record to compare against, on the same terms. |
+| `control_unusable` | The probe's own baseline read, the control it compares the test condition against, errored, was unreadable, or returned nothing. |
+| `insufficient_observations` | Records were readable but too few for the measurement. A span needs two dates; an ordering needs two. |
+| `date_unreadable` | A session date was present and could not be read as an ISO 8601 calendar date, so chronology, span and recency cannot be established from it. |
+| `overlap_too_thin` | The two sides align on too few common sessions to separate a wrong value from a date-basis misalignment. |
+| `date_basis_mismatch` | The two sides agree at a uniform session lag and not at lag zero, which is a calendar-basis difference rather than wrong numbers. |
+| `reference_value_degenerate` | The authority's value was zero on every aligned session, so relative deviation was undefined and nothing was compared. |
+| `coverage_incomplete` | Part of the payload could not be examined, so a clean result over the examined part does not establish a claim over the whole. |
+| `precondition_unmet` | A parameter needed to attribute a shortfall to the subject rather than to the world was absent or was not a usable measurement. |
+| `evidence_ambiguous` | The evidence is consistent with the finding and with its absence and supports neither. |
+| `authority_unavailable` | The authority did not answer, so no comparison was performed. A property of the authority and of the network the run was made from, not of the subject. **Reserved, not set yet.** |
+| `subject_not_observed` | The shared live pull returned nothing, so the probe never observed the subject. This is the `NOT_EVALUATED` reason, not an `INDETERMINATE` one. **Reserved, not set yet.** |
+| `harness_exception` | An unexpected exception inside a probe, recorded with its traceback. A fact about this run, not about the subject. **Reserved, not set yet.** |
+
+A reason code is not an accusation. It shares the record field `loss_cause` with the taxonomy above, because that field already existed and was null at every indeterminate, but the two vocabularies are disjoint and the outcome beside the code says which one is being read: a loss cause for `FAIL_SAFE` and `FAIL_UNSAFE`, an indeterminate reason for `INDETERMINATE` and `NOT_EVALUATED`, null for `PASS` and `OUT_OF_SCOPE`.
+
+**The codes are not mutually exclusive, and claiming otherwise would be the dishonest version of this.** A payload can be short of records and carry unreadable dates. A classifier reports the first condition that stopped it, so branch order inside the classifier is the tie-break, and the free text beside the code still says which records and which values. Three sites choose between two codes with a conditional rather than report a vaguer one that covers both: where either side could be the one with nothing readable, the code names the side.
+
+Thirteen of the sixteen are emitted, at all fifty indeterminate return sites in `suite/harness.py`. The last three are reserved in the same sense as `auth_degradation` above and for a narrower reason: they are conditions `suite/run.py` and `gateway/pilot.py` resolve rather than `suite/harness.py`, both files were outside the change that introduced this list, and all five of their sites still pass a null. They are `run.py:870` and `run.py:934` (the authority did not answer), `run.py:834` and `gateway/pilot.py:160` (nothing was obtained to judge), and `run.py:360` (an exception inside a probe). Naming them with the reason they are not yet set is more useful than publishing a list that cannot cover the record a reader is holding.
+
+**Closed how, exactly.** `suite/selftest.py` holds it closed two ways, because one of them is not enough. Every case that gets an `INDETERMINATE` back asserts the cause is a member, which covers the conditions the suite has a fixture for and nothing else. So a second check walks `suite/harness.py` with `ast` and fails if any `INDETERMINATE` return carries a second element outside the set, including a null, a misspelling, or anything that is not a readable string literal. That one is the load-bearing half: a classifier added next month cannot widen the list by arriving. A third check compares the set against this table, so a code added to the code and not to this document goes red rather than shipping a register whose vocabulary is wider than its documentation. The `ast` sweep covers `harness.py` only; extending it to `run.py` and `gateway/pilot.py` would fail today, which is why the three codes above are marked reserved rather than why the sweep is silent about them.
+
+Verified load-bearing by mutation: changing one reason code in `suite/harness.py` to a string that is not on this list makes `suite/selftest.py` exit 1 and print the file, line, function and offending value. The unmutated tree exits 0.
 
 ---
 

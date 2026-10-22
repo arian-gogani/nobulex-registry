@@ -26,10 +26,20 @@ from harness import (
     a1_chart, a2_edgar, AuthorityUnavailable,
     PASS, FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, NOT_EVALUATED,
     OUT_OF_SCOPE,
-    classify_absent_entity, classify_empty_window, classify_invalid_argument,
+    classify_absent_entity, classify_invalid_argument,
+    # classify_empty_window is imported here and DELIBERATELY NEVER CALLED.
+    # Its own docstring (harness.py:750) is the reason: the market-holiday
+    # reading it would have to make turns an ordinary empty window into a
+    # FAIL_UNSAFE accusation against a subject that answered correctly.
+    # README.md and suite/check_retracted_claims.py both already record that
+    # this probe is not built. The import stays so that fact is visible at the
+    # one place a reader would otherwise close the gap by wiring it in. Do not
+    # wire it in until the holiday basis is settled.
+    classify_empty_window,  # noqa: F401 -- uncalled on purpose, see above
     classify_padded_argument,
     classify_window_span,
-    classify_fidelity, classify_ohlc, classify_monotonic, classify_freshness,
+    classify_fidelity, classify_range_fidelity,
+    classify_ohlc, classify_monotonic, classify_freshness,
     classify_entity, classify_channel, classify_truncation,
 )
 
@@ -784,7 +794,7 @@ def main():
                 {"tool": hist, "period": "1mo ",
                  "control": "period='1mo' on the same entity"})
 
-        # live pull, reused by P04 through P08 ------------------------------
+        # live pull, reused by P04 through P08 and P12 ----------------------
         # The failure used to be swallowed whole: `except Exception: pass`,
         # the isError flag dropped on the floor, and parse_bars' own note
         # discarded. Five probes then reported "no bars" over a response that
@@ -805,8 +815,8 @@ def main():
             live_bars = None
 
         def live_missing():
-            """Why P04 through P08 have nothing to read, in terms a reader can
-            check, rather than in the two words 'no bars'.
+            """Why P04 through P08 and P12 have nothing to read, in terms a
+            reader can check, rather than in the two words 'no bars'.
 
             NOT_EVALUATED rather than INDETERMINATE, and the difference is the
             sentence below: these probes did not fail to decide, they never
@@ -816,10 +826,16 @@ def main():
             decide, which is a distinction the detail already drew and the
             field did not.
             """
+            # The probe list here is the record's own account of how wide the
+            # loss is, so it has to name every probe that reads the shared
+            # pull. It said "P04 through P08" while P12 read the same response,
+            # which under-reported the loss by one probe in every record that
+            # took this path.
             return (NOT_EVALUATED, None,
-                    live_note + ". P04 through P08 all read that one response, "
-                    "so none of them observed the subject's data and none "
-                    "issues a claim about it in either direction.", live_text)
+                    live_note + ". P04 through P08 and P12 all read that one "
+                    "response, so none of them observed the subject's data "
+                    "and none issues a claim about it in either direction.",
+                    live_text)
 
         def p04():
             if live_note:
@@ -870,6 +886,35 @@ def main():
             return o, c, d, None
         r.guard("P07", "transport fidelity against authority A1", p07)
 
+        # P12 range fidelity ------------------------------------------------
+        # P07 above compares Close and nothing else. A subject that transmits
+        # the authority's own Close faithfully and fabricates a plausible
+        # Open, High or Low around it passed every probe in this runner:
+        # classify_ohlc (P04) only checks a bar's four values against each
+        # other, so an internally consistent fabrication satisfies it, and
+        # P07 never looks past Close.
+        #
+        # classify_range_fidelity closed that gap in harness.py and was wired
+        # into gateway/ only. run.py is the only thing that writes records
+        # about third-party tools, so until now no PUBLISHED RECORD carried
+        # the check, while fourteen selftest cases and README.md's own prose
+        # described it as closed. This is that probe on the surface the
+        # records come from.
+        #
+        # It reads the same shared live pull as P04 through P08 and the same
+        # authority A1 window as P07, so it inherits both of their non-answer
+        # paths rather than inventing a third.
+        def p12():
+            if live_note:
+                return live_missing()
+            if not a1:
+                return a1_missing()
+            o, c, d = classify_range_fidelity(live_bars, a1["bars"],
+                                              CONFIG["price_tolerance_rel"])
+            return o, c, d, None
+        r.guard("P12", "range fidelity (Open/High/Low) against authority A1",
+                p12)
+
         def p08():
             if live_note:
                 return live_missing()
@@ -917,7 +962,25 @@ def main():
         verdict = INDETERMINATE
 
     ended = datetime.now(timezone.utc)
-    causes = sorted({p["loss_cause"] for p in r.probes if p["loss_cause"]})
+    # LOSS CAUSES ARE DEVIATION CAUSES, NOT INDETERMINATE REASONS.
+    #
+    # This slot used to take the second tuple element from every probe without
+    # consulting the outcome. That was harmless while the element was None for
+    # every INDETERMINATE site. It stopped being harmless on 22 Oct 2026, when
+    # all 50 indeterminate sites in harness.py were closed to a published list
+    # and began returning real codes there: the next run would have published
+    # `overlap_too_thin` and `subject_no_data` in a record's loss_causes array,
+    # rendered as chips beside genuine deviation causes like `stale_value`, as
+    # though the subject had been found to lose information when in fact the
+    # probe could not decide.
+    #
+    # The taxonomy published in README is a taxonomy of DEVIATIONS. An
+    # indeterminate reason belongs to the probe, lives in the probe's own row,
+    # and must not be promoted to a record-level finding.
+    causes = sorted({
+        p["loss_cause"] for p in r.probes
+        if p["loss_cause"] and p["outcome"] not in (INDETERMINATE, NOT_EVALUATED)
+    })
 
     rec = {
         "schema": SCHEMA_VERSION,
