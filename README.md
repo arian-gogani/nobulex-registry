@@ -86,6 +86,7 @@ No package install is required for the self-test. If you find a corrupted respon
 
 ```bash
 python3 examples/wrong_window.py
+python3 examples/unknown_outcome.py
 ```
 
 This offline example feeds fictional data into the suite's actual truncation classifier. It shows three cases: matching sessions (`PASS`), silently missing sessions (`FAIL_UNSAFE`), and equal row counts covering entirely different dates (`INDETERMINATE`). The last case passes a count-only comparison, but this probe cannot establish a clean result from it.
@@ -133,6 +134,24 @@ It exits 2 rather than 0 on absent, empty or unreadable input, because a run
 that examined nothing has established nothing. Checks it could not run stay in
 the indeterminate denominator rather than vanishing from it. Controls:
 `python3 gateway/selftest_pilot.py`.
+
+### A worked example with no customer in it
+
+`examples/unknown_outcome.py` reproduces a real defect from this repository,
+before and after, in one run. Not a hypothetical, and not found in someone
+else's code: `aggregate()` walked a fixed precedence order and returned the
+first member present, so an outcome outside that order was never looked at.
+**One unreadable outcome beside one pass aggregated to PASS, and PASS is a
+permit to execute a financial action.** Three of its eight cases changed
+decision, each from PERMIT to ESCALATE.
+
+The "before" column is computed by the original five-line function, included
+verbatim in the file rather than described, so the comparison is reproducible
+rather than asserted. Two rows exist to show the fix is not blunt: `FAIL_UNSAFE`
+still dominates and `FAIL_SAFE` still escalates rather than blocking.
+
+It survived 395 suite cases and eleven self-tests. That is the point of
+publishing it.
 
 ```bash
 python3 gateway/fault_challenge.py
