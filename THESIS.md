@@ -2,7 +2,7 @@
 
 > **This argues for the registry, which is a prior direction, not the
 > gateway, which is another prior prototype.** Nobulex's current focus is
-> [billing accuracy](https://github.com/arian-gogani/nobulex/blob/main/docs/CURRENT-IDEA.md).
+> billing accuracy.
 > This was written when Nobulex was an independent party grading third-party
 > tools, and it reads that way
 > throughout: "gateway" appears once below, as a category it dismisses, and

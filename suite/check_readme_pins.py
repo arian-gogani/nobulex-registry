@@ -181,6 +181,34 @@ def main() -> int:
         print(f"ok   selftest file count matches in {len(claimed_st)} "
               f"README claim(s)  ({n_selftests})")
 
+    # --- pin 5: no document may link into a repository we know is blocked --
+    # README.md linked github.com/arian-gogani/nobulex in two places and
+    # THESIS.md in one. That repository has returned HTTP 451 under a DMCA
+    # takedown since 2026-10-20, so the first substantive sentence of the README
+    # sent every reader to GitHub's takedown page, and did so for two days
+    # including a day on which the README was edited.
+    #
+    # Checked statically rather than by HEAD-requesting every URL, so this stays
+    # offline and deterministic like the rest of the suite. It cannot catch a
+    # link that rots tomorrow; it does catch the one we already know is dead.
+    BLOCKED_LINKS = ("github.com/arian-gogani/nobulex/",
+                     "github.com/arian-gogani/nobulex)")
+    for doc in ("README.md", "THESIS.md", "CONTRIBUTING.md"):
+        dp = ROOT / doc
+        if not dp.exists():
+            print(f"CANNOT CHECK: {doc} is absent")
+            return 2
+        dt = dp.read_text()
+        checked += 1
+        hits = [b for b in BLOCKED_LINKS if b in dt]
+        if hits:
+            failures.append(
+                f"{doc} links into arian-gogani/nobulex, which returns HTTP 451 "
+                f"under a DMCA takedown. Matched: {hits}. State the direction in "
+                "prose or point at a reachable destination.")
+    if not any("links into arian-gogani/nobulex" in f for f in failures):
+        print("ok   no document links into the DMCA-blocked repository")
+
     print()
     if failures:
         print(f"{len(failures)} pin(s) have drifted:\n")

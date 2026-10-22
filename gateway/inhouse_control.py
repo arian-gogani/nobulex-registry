@@ -266,7 +266,7 @@ def main() -> int:
     print("   same job'")
     print()
     print(f"  Half MET. On {len(faults)} well-formed-but-wrong faults, thirty lines")
-    print("  did the same job as 271, with no false blocks. Anyone claiming the")
+    print(f"  did the same job as {loc}, with no false blocks. Anyone claiming the")
     print("  gateway earns its keep by catching bad data should stop: on this")
     print("  corpus it does not, and the classifiers are the part that works.")
     print()

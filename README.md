@@ -1,7 +1,7 @@
 # Nobulex
 
 **Earlier prototype: decision integrity for autonomous finance.** Nobulex's
-current focus is [billing accuracy for usage-based products](https://github.com/arian-gogani/nobulex/blob/main/docs/CURRENT-IDEA.md).
+current focus is billing accuracy for usage-based products.
 This repository preserves the gateway and verification harness; it is not the
 current product offer.
 
@@ -22,7 +22,7 @@ come away confused about what is being offered.
 may execute right now: it verifies the evidence behind the action, evaluates a
 bounded policy, returns `PERMIT`, `BLOCK` or `ESCALATE`, and emits a
 hash-chained receipt. The current billing-accuracy thesis and tools live in
-[the main Nobulex repository](https://github.com/arian-gogani/nobulex).
+the main Nobulex repository, which is **currently unavailable**: it returns HTTP 451 under a DMCA takedown recorded 20 October 2026, so no link to it is given here.
 
 **What it is actually for, stated narrowly because a control narrowed it.**
 Not catching bad data. On a corpus of thirteen well-formed-but-wrong faults, a
@@ -535,8 +535,8 @@ diff <(cat brand/register.html) <(curl -sS https://nobulex.com/register)
 ```
 
 **What a reader should expect that diff to contain, and nothing else.** Measured
-22 October, 26 changed lines in five categories, none of them a record or a
-verdict:
+22 October, 26 changed lines in six categories, none of them a record or a
+verdict, though one of them is a retracted claim:
 
 | Category | Why it differs |
 |---|---|
@@ -545,8 +545,13 @@ verdict:
 | two Vercel analytics `<script>` blocks | injected at deploy, not emitted by the generator |
 | an HTML comment | present only in the committed copy |
 | the `<p class="note">` paragraph and the direction banner | rewritten on the deployed page |
+| the `<div class="oneline">` headline | rewritten on the deployed page. **The committed text is one of the three retracted claims `suite/check_retracted_claims.py` flags**, so this row is also the known regeneration defect |
 
-**If the diff contains anything outside those five, say so loudly.** That is the
+**If the diff contains anything outside those six, say so loudly.** This
+enumeration said five until later the same day, and the missing sixth was the
+page headline. An audit found it by running the command this section
+publishes, which is the only reason a hand-counted table of a moving target
+ever gets corrected. It should be a script; it is not yet. That is the
 property this check exists to protect: the register is compiled from the records
 by `suite/render_register.py`, which writes identical bytes to every publish
 target in one build, specifically so no hand reaches the page between the
