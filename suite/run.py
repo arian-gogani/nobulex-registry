@@ -25,6 +25,7 @@ from harness import (
     next_in_sequence,
     a1_chart, a2_edgar, AuthorityUnavailable,
     PASS, FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, NOT_EVALUATED,
+    LOSS_CAUSES, LOSS_CAUSE_TAXONOMY_VERSION,
     OUT_OF_SCOPE,
     classify_absent_entity, classify_invalid_argument,
     # classify_empty_window is imported here and DELIBERATELY NEVER CALLED.
@@ -988,6 +989,12 @@ def main():
         "attestation_type": attestation,
         "verdict": verdict,
         "loss_causes": causes,
+        # README promises "The taxonomy is versioned from the first record it
+        # is applied to" and until 22 Oct 2026 no record carried a field for
+        # it, so the promise had nowhere to live. A reader holding an old
+        # record needs to know which vocabulary its chips were written
+        # against; a renamed cause silently changes what they mean.
+        "loss_cause_taxonomy": LOSS_CAUSE_TAXONOMY_VERSION,
         "subject": {
             "package": package_name(subject_dir, origin),
             "package_source": "origin" if repo_from_origin(origin) else "directory",

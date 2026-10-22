@@ -40,7 +40,7 @@ sys.path.insert(0, __file__.rsplit("/", 1)[0])
 
 from harness import (
     PASS, FAIL_SAFE, FAIL_UNSAFE, INDETERMINATE, OUT_OF_SCOPE,
-    NOT_EVALUATED, INDETERMINATE_REASONS,
+    NOT_EVALUATED, INDETERMINATE_REASONS, LOSS_CAUSES,
     aggregate, parse_bars, CONFIG, next_in_sequence,
     a1_chart, AuthorityUnavailable,
     classify_absent_entity, classify_empty_window, classify_invalid_argument,
@@ -4061,6 +4061,82 @@ def _indeterminate_reason_sweep():
     return sorted(bad)
 
 
+def _loss_cause_sweep():
+    """Every FAIL_UNSAFE/FAIL_SAFE cause literal in harness.py, vs LOSS_CAUSES.
+
+    A sibling of the reason sweep rather than an extension of it, deliberately:
+    that one lives inside a nested ast.NodeVisitor and editing it in place broke
+    the indentation twice on 22 Oct 2026. Two small sweeps that each parse are
+    worth more than one clever one that does not.
+
+    The loss causes lived only as string literals in harness.py and as a table
+    in README, and the two had drifted in BOTH directions: `surplus_session` was
+    emitted by classify_window_span and absent from the table, while
+    `auth_degradation` sat in the table and was emitted by nothing. A classifier
+    returning "fabricated_feild" would have passed every gate in this file.
+    """
+    import ast as _a
+    import os as _os
+    here = _os.path.dirname(_os.path.abspath(__file__))
+    src = open(_os.path.join(here, "harness.py")).read()
+    tree = _a.parse(src)
+    bad = []
+    stack = []
+
+    class _S(_a.NodeVisitor):
+        def visit_FunctionDef(self, node):
+            stack.append(node.name)
+            self.generic_visit(node)
+            stack.pop()
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_Return(self, node):
+            v = node.value
+            if (isinstance(v, _a.Tuple) and len(v.elts) >= 2
+                    and isinstance(v.elts[0], _a.Name)
+                    and v.elts[0].id in ("FAIL_UNSAFE", "FAIL_SAFE")):
+                c = v.elts[1]
+                where = "harness.py:%d in %s()" % (
+                    node.lineno, stack[-1] if stack else "?")
+                if isinstance(c, _a.Constant) and isinstance(c.value, str):
+                    if c.value not in LOSS_CAUSES:
+                        bad.append("%s: %r is not a published loss cause"
+                                   % (where, c.value))
+                elif isinstance(c, _a.Constant) and c.value is None:
+                    pass  # an adverse outcome may legitimately carry no cause
+                # Anything else (a name, an f-string, a call) is not checkable
+                # here. Reported so the gap is visible rather than assumed away.
+                elif not isinstance(c, _a.Constant):
+                    bad.append("%s: cause is %s, not a string literal this "
+                               "sweep can check" % (where, _a.unparse(c)))
+            self.generic_visit(node)
+
+    _S().visit(tree)
+    return sorted(bad)
+
+
+def _loss_cause_table_drift():
+    """Differences between LOSS_CAUSES and the README taxonomy table."""
+    import os as _os
+    import re as _re
+    path = _os.path.join(
+        _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+        "README.md")
+    text = open(path).read()
+    published = set(_re.findall(r"^\| `([a-z_]+)` \|", text, _re.M))
+    bad = []
+    for c in sorted(LOSS_CAUSES - published):
+        bad.append("%s is in harness.LOSS_CAUSES and not published in the "
+                   "README taxonomy table" % c)
+    for c in sorted(published - LOSS_CAUSES):
+        if c in INDETERMINATE_REASONS:
+            continue  # the reason table uses the same row shape
+        bad.append("%s is published in a README table and is not in "
+                   "harness.LOSS_CAUSES" % c)
+    return bad
+
+
+
 def _reason_list_drift():
     """Differences between INDETERMINATE_REASONS and the README table."""
     import re as _re
@@ -4090,6 +4166,14 @@ gate("closed list / every INDETERMINATE return in harness.py names a reason "
 
 gate("closed list / harness.py and the README table name the same reasons",
      _reason_list_drift, [], "detect")
+
+gate("taxonomy / every FAIL_UNSAFE and FAIL_SAFE cause in harness.py is a "
+     "published loss cause",
+     _loss_cause_sweep, [], "detect")
+
+gate("taxonomy / harness.LOSS_CAUSES and the README table name the same causes",
+     _loss_cause_table_drift, [], "detect")
+
 
 
 # ============================================================ report

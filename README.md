@@ -166,7 +166,7 @@ verbatim in the file rather than described, so the comparison is reproducible
 rather than asserted. Two rows exist to show the fix is not blunt: `FAIL_UNSAFE`
 still dominates and `FAIL_SAFE` still escalates rather than blocking.
 
-It survived 401 suite cases and seventeen self-test files. That is the point of
+It survived 403 suite cases and seventeen self-test files. That is the point of
 publishing it.
 
 ```bash
@@ -188,7 +188,7 @@ authority's own covered window that the authority does not carry is now
 `FAIL_UNSAFE` with cause `surplus_session`, bounded to inside the window on
 purpose so a session past the authority's own latest date (which may just
 be a session the authority hasn't caught up to yet) is not flagged the same
-way. Pinned in `suite/selftest.py` (401 cases, run it), mutation-tested
+way. Pinned in `suite/selftest.py` (403 cases, run it), mutation-tested
 by removing the check and confirming the exploit reopens, and recorded in
 the corpus as `fabricated_session`.
 
@@ -204,7 +204,7 @@ real Open/High/Low instead of dropping them, and `subject_from_authority()`
 mirrors them faithfully instead of flattening all three to Close, which is
 what let this gap go unnoticed by the live demo for as long as it did.
 Verified live: a 2% price corruption is now caught independently by both
-`fidelity` and `range_fidelity`. Pinned in `suite/selftest.py` (401 cases
+`fidelity` and `range_fidelity`. Pinned in `suite/selftest.py` (403 cases
 now), mutation-tested, and recorded in the fault corpus as
 `fabricated_range`.
 
@@ -435,6 +435,7 @@ Every deviation is classified before it is recorded. The taxonomy is versioned f
 | `unsignaled_fallback` | Served from a fallback source without disclosing the substitution. |
 | `auth_degradation` | Silently downgraded to a lower privilege tier and returned reduced data as complete. **Reserved, not implemented.** |
 | `schema_drift` | Upstream shape changed and the adapter absorbed it into a wrong but valid response. |
+| `surplus_session` | Returned a session the authority does not have, inside the requested window. Emitted by `classify_window_span`; it was absent from this table until 22 October 2026 while the harness was emitting it. |
 
 Each code is designed to be decidable from a run artifact without a human judgment call, which is what keeps the corpus consistent as it grows.
 

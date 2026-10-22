@@ -110,6 +110,38 @@ NOT_EVALUATED = "NOT_EVALUATED"
 # The list is published in README.md under "The indeterminate reason list".
 # Changing a member here without changing it there is a drift this file cannot
 # catch; the published table is the contract.
+# LOSS CAUSES. The published taxonomy of DEVIATIONS, as distinct from the
+# indeterminate reasons below, which say why a probe could not decide.
+#
+# These existed only as string literals in this file and as a table in README
+# until 22 Oct 2026, and the two had drifted apart in both directions:
+# `surplus_session` was emitted by classify_window_span and appeared nowhere in
+# the table (only once in README prose at line 188), while `auth_degradation`
+# sat in the table and was emitted by nothing. README:424 says "Every deviation
+# is classified before it is recorded. The taxonomy is versioned from the first
+# record it is applied to", and a cause outside the taxonomy is not classified
+# by it.
+#
+# A classifier returning "fabricated_feild" would have passed every gate.
+LOSS_CAUSES = frozenset({
+    "silent_empty",
+    "stale_value",
+    "wrong_entity",
+    "fabricated_field",
+    "partial_truncation",
+    "unsignaled_fallback",
+    "schema_drift",
+    "surplus_session",
+    # Reserved: defined and published, emitted by nothing yet. README discloses
+    # this explicitly rather than letting a reader assume coverage.
+    "auth_degradation",
+})
+
+# Versioned because README promises it is. A renamed or re-scoped cause makes
+# every earlier record's chips mean something different, and a reader holding an
+# old record needs to know which vocabulary it was written against.
+LOSS_CAUSE_TAXONOMY_VERSION = "loss-cause-v0"
+
 INDETERMINATE_REASONS = frozenset({
     # --- the response could not be read -------------------------------------
     # No structured payload was obtained at all.
