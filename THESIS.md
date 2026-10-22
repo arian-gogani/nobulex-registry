@@ -219,7 +219,7 @@ Ground truth cannot be made reproducible at acceptable cost. If licensing preven
 
 ## Where this stands
 
-The method is public and runnable. The suite, the self test, the record generator, the renderer and the publication gate are in this repository to be read, run and attacked. The witness independence scale and its vectors are public. One upstream fix arising from this line of work is a public pull request against ranaroussi/yfinance making a silently suppressed price adjustment observable to the caller on every return path.
+The method is public and runnable. The suite, the self test, the record generator, the renderer and the publication gate are in this repository to be read, run and attacked. The witness independence scale and its vectors are public. One public pull request arising from this line of work, against ranaroussi/yfinance, proposed making a silently suppressed price adjustment observable to the caller on every return path. **It was closed unmerged on 11 September 2026**, so nothing upstream was fixed and the phrase "upstream fix", which stood here until 22 October 2026, was wrong.
 
 The register is built and holds records under right of reply. Nothing has been published. No relying party has paid.
 

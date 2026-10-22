@@ -51,7 +51,11 @@ ROOT = Path(__file__).resolve().parents[1]
 # README documents, including documenting what was withdrawn.
 PUBLISHED = ("brand/register.html", "brand/register.template.html",
              "suite/run.py", "suite/hold.py")
-DOCS = ("README.md",)
+# THESIS.md belongs here too. A phrase added on 22 Oct 2026 for a claim that
+# lives in THESIS.md was scoped to DOCS while DOCS was README-only, so the
+# entry could never fire. A gate scoped to the wrong surface is a gate that
+# reports clean about a file it does not read.
+DOCS = ("README.md", "THESIS.md")
 
 RETRACTED = [
     (PUBLISHED, "is now an inline decision-integrity gateway",
@@ -63,6 +67,12 @@ RETRACTED = [
     (PUBLISHED, "proves what happened on the other side",
      'README.md: "Nothing is published." And a signature proves who signed, '
      "not that the claim was true."),
+    (DOCS, "One upstream fix arising from this line of work",
+     "ranaroussi/yfinance#2967 is closed and unmerged (closed 11 Sep 2026, by "
+     "the author). Nothing upstream was fixed."),
+    (DOCS, "closed-market dates, OHLC invariants",
+     "The closed-market-dates probe is not built: classify_empty_window has no "
+     "caller, by its own docstring's reasoning. It was listed under Built:."),
     (DOCS, "## What is sold",
      'README.md\'s own "Not yet true" section: "No buyer has paid for a '
      'verification." A heading in the present tense over an empty order book.'),
@@ -89,6 +99,7 @@ CHECKED = [
     Path("suite/hold.py"),
     # README itself, for present-tense claims over things that do not exist.
     Path("README.md"),
+    Path("THESIS.md"),
 ]
 
 
