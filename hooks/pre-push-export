@@ -62,5 +62,63 @@ if ! $PY suite/selftest.py >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "pre-push: nothing held is present, the register agrees with the manifest, the suite passes."
+# EVERY OTHER GATE IN THIS REPOSITORY, because until 22 Oct 2026 none of them
+# ran here. The hook invoked two commands. README said "It exits nonzero the day
+# any fault stops being caught" and "check_readme_pins.py, which exits nonzero
+# when it drifts", and both sentences were true of the scripts and false of any
+# day: there is no CI in this repository, so a gate nobody invokes is a gate
+# that passes on the day someone runs it and never on the day it matters.
+#
+# check_retracted_claims.py is DELIBERATELY ABSENT from this list. It exits 1 on
+# a known, separately-tracked defect that can only be cleared by regenerating
+# brand/register.html in the tree that holds the records. A gate that blocks
+# every push on a defect you cannot fix here teaches people to pass --no-verify,
+# after which none of the gates above work either.
+GATES="
+suite/check_readme_pins.py
+gateway/selftest_gateway.py
+gateway/selftest_serve.py
+gateway/selftest_observe.py
+gateway/selftest_pilot.py
+gateway/fault_challenge.py
+gateway/inhouse_control.py
+examples/wrong_window.py
+examples/unknown_outcome.py
+examples/decision_demo.py
+"
+
+for g in $GATES; do
+  [ -f "$g" ] || continue
+  if ! $PY "$g" >/dev/null 2>&1; then
+    $PY "$g"
+    echo ""
+    echo "PUSH REFUSED."
+    echo "  $g exits nonzero."
+    echo ""
+    echo "  This is a published claim that no longer holds. Each of these"
+    echo "  scripts asserts something this repository states in prose: a"
+    echo "  pinned hash, a case count, an indeterminate ceiling, a line-count"
+    echo "  bound, a corpus hash, or a worked example's expected output."
+    echo "  Pushing now publishes the prose without the property."
+    echo ""
+    exit 1
+  fi
+done
+
+# The remaining selftest files. suite/selftest.py is run above; these are the
+# other sixteen, and before today none of them ran on a push either.
+for g in suite/selftest_*.py gateway/selftest_live.py; do
+  [ -f "$g" ] || continue
+  if ! $PY "$g" >/dev/null 2>&1; then
+    $PY "$g"
+    echo ""
+    echo "PUSH REFUSED."
+    echo "  $g exits nonzero. A selftest that fails in the repository a"
+    echo "  stranger clones is the thing this project exists to catch."
+    echo ""
+    exit 1
+  fi
+done
+
+echo "pre-push: nothing held is present, the register agrees with the manifest, and every selftest, gate and worked example in this repository exits 0."
 exit 0
