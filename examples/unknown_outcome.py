@@ -6,8 +6,8 @@
 This is a worked example with no customer in it, which is the only honest kind
 available while there are no customers. The defect is not hypothetical and was
 not found in someone else's code: it was here, in the function every verdict in
-this project passes through, and it survived 395 suite cases plus eleven
-self-tests.
+this project passes through, and it survived 395 suite cases plus
+seventeen self-test files.
 
 THE DEFECT, stated plainly
 --------------------------

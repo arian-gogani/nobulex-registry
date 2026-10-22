@@ -7,7 +7,7 @@ THESIS.md names three conditions that would falsify the gateway. The third is
 "a competent team deciding three hundred lines in-house does the same job".
 
 That condition cannot be answered by argument, and the line count does not
-answer it either: gateway/decide.py is 271 lines of code, which is UNDER the
+answer it either: gateway/decide.py is a few hundred lines of code, UNDER the
 bar the thesis set. So the defence cannot be "it is too much code to rewrite".
 
 This script answers it the only honest way available. It writes the in-house
@@ -89,6 +89,32 @@ def inhouse_decide(outcomes, context, limits):
 # this list with the wrong key, silently got an empty list, and reported a
 # catch rate for a limits path that never executed. That is the exact defect
 # class this repository exists to find, and it got into the control for it.
+def decide_py_loc():
+    """Measure decide.py rather than restate it.
+
+    THESIS.md's third falsification condition turns on this file being under
+    three hundred lines. The figure was HARDCODED as 271 on 20 Oct, which was
+    correct when measured and WRONG by 22 Oct, because the NOT_EVALUATED fix
+    added lines to decide.py and nothing compared the published number to the
+    file. A published number that no code checks is a number that drifts; that
+    is this repository's entire argument, committed against this repository.
+
+    The measure is stated so it can be reproduced: non-blank, non-comment
+    lines. Other measures give other answers (399 total, 340 non-blank), and a
+    claim of "lines of code" without naming the measure is unfalsifiable.
+    """
+    path = ROOT / "gateway" / "decide.py"
+    n = 0
+    for line in path.read_text().splitlines():
+        t = line.strip()
+        if t and not t.startswith("#"):
+            n += 1
+    return n
+
+
+# The bar THESIS.md set for itself. Not tuned to the current value.
+LOC_CEILING = 300
+
 INHOUSE_LIMITS = fc.POLICY["limits"]
 assert INHOUSE_LIMITS, "no limits parsed from POLICY; the limits path would be vacuous"
 assert all("field" in l and "value" in l and "op" in l for l in INHOUSE_LIMITS), \
@@ -223,6 +249,17 @@ def main() -> int:
     # The verdict, stated against the thesis condition, including the half
     # that goes against the gateway.
     # ------------------------------------------------------------------
+    loc = decide_py_loc()
+    print(f"  decide.py          {loc} lines of code (non-blank, non-comment), "
+          f"ceiling {LOC_CEILING}")
+    if loc > LOC_CEILING:
+        failures.append(
+            f"decide.py is {loc} non-blank non-comment lines, over the "
+            f"{LOC_CEILING}-line bar THESIS.md set for its own third "
+            "falsification condition. The 'you could write this in three "
+            "hundred lines' argument now cuts the other way.")
+    print()
+
     print("VERDICT against THESIS.md's third falsification condition")
     print("-" * 72)
     print("  'a competent team deciding three hundred lines in-house does the")

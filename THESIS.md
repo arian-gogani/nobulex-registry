@@ -54,8 +54,14 @@ On the first axis the short version does the same job, so **the gateway does
 not earn its keep by catching bad data**. The catch rate belongs to the
 suite's classifiers, which both versions share. Any pitch resting on the
 fault-corpus catch rate as the gateway's contribution is overclaiming, and the
-line count does not rescue it either: `decide.py` is 271 lines of code, under
-the three-hundred bar this paragraph set.
+line count does not rescue it either: `decide.py` is **under the
+three-hundred-line bar this paragraph set**, measured as non-blank
+non-comment lines and printed by `gateway/inhouse_control.py`, which now
+exits nonzero if it crosses. The figure is not restated here: it was
+hardcoded as 271 on 20 October, drifted to 274 two days later when the
+NOT_EVALUATED fix added lines, and nothing compared it to the file. Other
+measures give other answers (399 total, 340 non-blank), so a line count
+without its measure is unfalsifiable.
 
 The margin is entirely on the second axis, and it is one shape: every default
 in the short version resolves toward PERMIT. `all([])` is True, a missing

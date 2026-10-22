@@ -122,6 +122,61 @@ def main() -> int:
         print(f"ok   held-record count matches the page in "
               f"{len(count_claims)} README claim(s)  ({expected_word})")
 
+    # --- pin 3: the suite case count --------------------------------------
+    # README stated 359 in one place and 378 in another, 22 lines apart, while
+    # the suite printed 395. Three figures for one counter, none current,
+    # because nothing compared prose to output. Found 22 Oct by an audit.
+    import subprocess
+    r = subprocess.run([sys.executable, str(ROOT / "suite" / "selftest.py")],
+                       capture_output=True, text=True)
+    m = re.search(r"^(\d+) cases:", r.stdout, re.M)
+    if not m:
+        print("CANNOT CHECK: suite/selftest.py did not print '<n> cases:'.")
+        return 2
+    actual_cases = int(m.group(1))
+    checked += 1
+    claimed = [int(c) for c in re.findall(r"`suite/selftest\.py` \((\d+) cases", text)]
+    claimed += [int(c) for c in re.findall(r"survived (\d+) suite cases", text)]
+    if not claimed:
+        print("CANNOT CHECK: no suite case count claimed in README.md.")
+        return 2
+    bad = [c for c in claimed if c != actual_cases]
+    if bad:
+        failures.append(
+            f"suite/selftest.py prints {actual_cases} cases, but README.md "
+            f"claims {sorted(set(bad))}. A case count in prose drifts every "
+            "time a case is added; this is why it is checked.")
+    else:
+        print(f"ok   suite case count matches in {len(claimed)} README "
+              f"claim(s)  ({actual_cases})")
+
+    # --- pin 4: the selftest file count -----------------------------------
+    n_selftests = len(list((ROOT / "suite").glob("selftest*.py"))) + \
+                  len(list((ROOT / "gateway").glob("selftest*.py")))
+    checked += 1
+    words_rev = {v: k for k, v in words.items()}
+    claimed_st = re.findall(
+        r"(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+        r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|"
+        r"twenty|\d+) self-test", text)
+    extra = {"eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+             "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+             "nineteen": 19, "twenty": 20}
+    lookup = dict(words_rev)
+    lookup.update(extra)
+    bad_st = []
+    for c in claimed_st:
+        val = lookup.get(c, int(c) if c.isdigit() else None)
+        if val is not None and val != n_selftests:
+            bad_st.append(c)
+    if bad_st:
+        failures.append(
+            f"{n_selftests} selftest files exist, but README.md says "
+            f"{sorted(set(bad_st))}.")
+    elif claimed_st:
+        print(f"ok   selftest file count matches in {len(claimed_st)} "
+              f"README claim(s)  ({n_selftests})")
+
     print()
     if failures:
         print(f"{len(failures)} pin(s) have drifted:\n")

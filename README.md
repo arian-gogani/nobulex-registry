@@ -150,7 +150,7 @@ verbatim in the file rather than described, so the comparison is reproducible
 rather than asserted. Two rows exist to show the fix is not blunt: `FAIL_UNSAFE`
 still dominates and `FAIL_SAFE` still escalates rather than blocking.
 
-It survived 395 suite cases and eleven self-tests. That is the point of
+It survived 395 suite cases and seventeen self-test files. That is the point of
 publishing it.
 
 ```bash
@@ -172,7 +172,7 @@ authority's own covered window that the authority does not carry is now
 `FAIL_UNSAFE` with cause `surplus_session`, bounded to inside the window on
 purpose so a session past the authority's own latest date (which may just
 be a session the authority hasn't caught up to yet) is not flagged the same
-way. Pinned in `suite/selftest.py` (359 cases now, was 356), mutation-tested
+way. Pinned in `suite/selftest.py` (395 cases, run it), mutation-tested
 by removing the check and confirming the exploit reopens, and recorded in
 the corpus as `fabricated_session`.
 
@@ -188,7 +188,7 @@ real Open/High/Low instead of dropping them, and `subject_from_authority()`
 mirrors them faithfully instead of flattening all three to Close, which is
 what let this gap go unnoticed by the live demo for as long as it did.
 Verified live: a 2% price corruption is now caught independently by both
-`fidelity` and `range_fidelity`. Pinned in `suite/selftest.py` (378 cases
+`fidelity` and `range_fidelity`. Pinned in `suite/selftest.py` (395 cases
 now), mutation-tested, and recorded in the fault corpus as
 `fabricated_range`.
 
