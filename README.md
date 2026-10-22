@@ -403,15 +403,19 @@ Correction: this README previously allowed maintainer-funded re-tests. That exce
 
 ---
 
-## What is sold
+## What would be sold
 
-Two things, neither of which is the public register.
+Two things, neither of which is the public register. **Nothing here has been
+sold.** Section "Not yet true" below states that no buyer has paid for a
+verification, and this section is written in the conditional to match it. It
+described both products in the present tense until 22 October 2026, which read
+as a price list over an empty order book.
 
-**Buyer-pinned verification.** You name the server and the exact release you intend to deploy, plus the conditions you require: which upstreams, which configuration, which tolerance, which environment. Nobulex tests that tuple independently and returns a procurement-ready attestation. This is the first paid product, because it is the only one where somebody has already decided to spend money and needs a reason to sign.
+**Buyer-pinned verification.** You name the server and the exact release you intend to deploy, plus the conditions you require: which upstreams, which configuration, which tolerance, which environment. Nobulex would test that tuple independently and return an attestation. This is intended as the first paid product, because it is the only one where somebody has already decided to spend money and needs a reason to sign.
 
-**Continuous verification.** A pass three months ago says nothing about today. Upstreams change shape, maintainers ship, adapters absorb drift silently. Continuous verification re-runs the pinned suite against the pinned subject on a schedule and alerts when the verdict changes. This is the recurring product, and it is the one that matters most, because it is the only version of this that keeps being true.
+**Continuous verification.** A pass three months ago says nothing about today. Upstreams change shape, maintainers ship, adapters absorb drift silently. Continuous verification would re-run the pinned suite against the pinned subject on a schedule and alert when the verdict changes. **No scheduler exists in this repository**, verified by searching for cron, schedule, celery, systemd and launchd across every Python file: this is a specification, not a running service. It is intended as the recurring product, and it is the one that would matter most, because it is the only version of this that keeps being true.
 
-The public register is the distribution surface for both. It is marketing. It is not the business, and confusing the two is how registries with beautiful dashboards run out of money.
+The public register would be the distribution surface for both. It is marketing, and it has distributed nothing: every record it has issued is held. It is not the business, and confusing the two is how registries with beautiful dashboards run out of money.
 
 ---
 
