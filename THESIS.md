@@ -119,9 +119,40 @@ Five properties. Four are about the test. The fifth is about the sentence descri
 
 **Reproducibility.** Each verdict ships artifacts sufficient for another qualified party to repeat the procedure and evaluate the result. The verifier does not have to be believed on the strength of claimed expertise or claimed independence.
 
-Reproducibility has a real constraint worth stating rather than hiding. Authoritative reference data is frequently licensed and frequently non redistributable, so for many subjects the values used cannot be republished. The resolution is that reproducibility is satisfied by publishing everything needed to repeat the comparison rather than everything needed to skip it: the named authority, the retrieval time, the exact query, the tolerance, and a cryptographic commitment to the retrieved values. A party with its own entitlement to the same authority can reproduce the verdict. A party without one can verify that we committed to the values before we saw the result. Where a suite can be built on primary sources that are public, it is, precisely because that makes the verdict checkable by more people.
+Reproducibility has a real constraint worth stating rather than hiding. Authoritative reference data is frequently licensed and frequently non redistributable, so for many subjects the values used cannot be republished. The resolution is that reproducibility is satisfied by publishing everything needed to repeat the comparison rather than everything needed to skip it: the named authority, the retrieval time, the exact query, the tolerance, and a cryptographic commitment to the retrieved values. **All five are in the record as of 23 October
+2026, and four of them were not before.** `suite/run.py` now writes `query`,
+`retrieved_at` and `values_sha256` for both authorities. Until that date the
+record carried the authority's identity, its reachability and a bar count:
+`hashlib` appeared once in that file and hashed lockfiles. The one element of
+this list that does the work the sentence claims for it was the missing one.
+The digest is over the canonical form of the compared values and moves on a
+one-cent change, verified; licensed data is still not republished, because a
+digest is not the data. A party with its own entitlement to the same authority can reproduce the verdict. A party without one can verify that we committed to the values before we saw the result. Where a suite can be built on primary sources that are public, it is, precisely because that makes the verdict checkable by more people.
 
-**Publication completeness.** Runs are committed before their results are known, and an append only register shows that a record exists even while it is held for right of reply. This is what prevents a verifier from testing repeatedly and publishing only the favourable outcomes. Withholding a subject's identity during its response window can be justified. Hiding the existence of the held record cannot.
+**Publication completeness.** An append
+only register shows that a record exists even while it is held for right of reply. This is what prevents a verifier from testing repeatedly and publishing only the favourable outcomes. Withholding a subject's identity during its response window can be justified. Hiding the existence of the held record cannot.
+
+**And the half of that property which does not exist, stated here rather than
+left for a reader to find.** This paragraph read "Runs are committed before
+their results are known" until 23 October 2026, in the present tense, as a
+property the method has. **Nothing in this repository precommits a run.**
+`records/held.manifest.json` is written by `hold.py --commit`, which hashes
+record files that already exist with their verdict fields populated: it commits
+to a finished verdict, not to a pending run. The nearest thing is `run.py`'s
+`O_EXCL` claim of a record id before the first probe, which means a suppressed
+run leaves a gap in the sequence. That is weaker than a precommitment and is not
+what the sentence claimed.
+
+The register half IS implemented and gated: the held count is compiled from the
+records and the renderer refuses to write the page if a held identifier reaches
+it. So the property was half true and read as wholly true, which is the scope
+failure this document names as the one this project has broken most often.
+
+Implementing the missing half means splitting `run.py` into a precommit phase
+and an execute phase, so a commitment is written and committed to git *before*
+the probes run. That is specified and deliberately not half-built: a
+precommitment that can be rewritten after the fact is worse than none, because
+it invites the belief it was supposed to earn.
 
 **Scope enumeration.** A verdict states what it does not establish over an enumerated set, and the enumeration is published with it. Stating the negative is necessary and not sufficient, because the statement ranges over a set and the set can be wrong on day one. This property exists because of the four scope failures described above, and it is the property this project has broken most often in its own work.
 

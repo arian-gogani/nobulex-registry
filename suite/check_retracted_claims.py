@@ -67,6 +67,10 @@ RETRACTED = [
     (PUBLISHED, "proves what happened on the other side",
      'README.md: "Nothing is published." And a signature proves who signed, '
      "not that the claim was true."),
+    (DOCS, "Runs are committed before their results are known",
+     "Nothing in this repository precommits a run. hold.py --commit hashes "
+     "record files whose verdict fields are already populated, so it commits "
+     "to a finished verdict. THESIS now discloses this."),
     (DOCS, "One upstream fix arising from this line of work",
      "ranaroussi/yfinance#2967 is closed and unmerged (closed 11 Sep 2026, by "
      "the author). Nothing upstream was fixed."),

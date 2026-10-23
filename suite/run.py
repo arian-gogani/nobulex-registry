@@ -539,10 +539,38 @@ def main():
     auth_status = {}
     a1 = a2 = None
     try:
+        # THE CRYPTOGRAPHIC COMMITMENT THESIS PROMISES, added 23 Oct 2026.
+        #
+        # THESIS says reproducibility is satisfied by publishing "the named
+        # authority, the retrieval time, the exact query, the tolerance, and a
+        # cryptographic commitment to the retrieved values", so that "a party
+        # without [an entitlement] can verify that we committed to the values
+        # before we saw the result."
+        #
+        # The record carried the authority identity, reachability and a BAR
+        # COUNT. No digest of the compared values existed anywhere: hashlib
+        # appeared once in this file and hashed lockfiles. The one element of
+        # that five-item list doing the work the paragraph claims was missing.
+        #
+        # Licensed data is still not republished. A digest is not the data,
+        # which is the point: it commits to what was compared without
+        # redistributing it.
+        a1_query = {"authority": "A1", "ticker": LIVE_TICKER,
+                    "range": "1mo", "interval": "1d"}
+        a1_at = datetime.now(timezone.utc).isoformat()
         a1 = a1_chart(LIVE_TICKER, rng="1mo", interval="1d")
-        auth_status["A1"] = {"reachable": True, "bars": len(a1["bars"]),
-                             "symbol": a1["symbol"],
-                             "date_basis": a1["tz_basis"]}
+        auth_status["A1"] = {
+            "reachable": True,
+            "bars": len(a1["bars"]),
+            "symbol": a1["symbol"],
+            "date_basis": a1["tz_basis"],
+            "query": a1_query,
+            "retrieved_at": a1_at,
+            "values_sha256": hashlib.sha256(
+                json.dumps(a1["bars"], sort_keys=True,
+                           separators=(",", ":")).encode("utf-8")
+            ).hexdigest(),
+        }
         print(f"  authority A1  {len(a1['bars'])} sessions, "
               f"date basis: {a1['tz_basis']}")
     except Exception as e:
@@ -550,7 +578,16 @@ def main():
         print(f"  authority A1  UNREACHABLE {e}")
     try:
         a2 = a2_edgar(LIVE_TICKER)
-        auth_status["A2"] = {"reachable": True, "registrant": a2}
+        auth_status["A2"] = {
+            "reachable": True,
+            "registrant": a2,
+            "query": {"authority": "A2", "ticker": LIVE_TICKER},
+            "retrieved_at": datetime.now(timezone.utc).isoformat(),
+            "values_sha256": hashlib.sha256(
+                json.dumps(a2, sort_keys=True,
+                           separators=(",", ":")).encode("utf-8")
+            ).hexdigest(),
+        }
         print(f"  authority A2  registrant for {LIVE_TICKER}: {a2}")
     except Exception as e:
         auth_status["A2"] = {"reachable": False, **auth_failure(e)}
