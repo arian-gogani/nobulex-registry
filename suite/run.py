@@ -1049,7 +1049,26 @@ def main():
                 "window_days": 7,
                 "window_closes_at": None,
                 "reply_received_at": None,
-                "reply": None,
+                # THE REPLY BODY. This was the single key `"reply": None` until
+                # 23 Oct 2026, and it was the ONLY write of it anywhere; nothing
+                # in the repository ever read it. Meanwhile four surfaces
+                # promised that a reply "publishes alongside the record,
+                # unedited": this rule string, README, render_register.py's own
+                # prose, and the live register page itself. The commitment was
+                # asserted in four places and the field that would carry it was
+                # written as None by the one function that writes it.
+                #
+                # body_sha256 is what makes "unedited" checkable rather than
+                # assertable: the renderer refuses to publish a body whose
+                # digest disagrees with it, so a reader can recompute the hash
+                # over what they are shown.
+                "reply": {
+                    "received_at": None,
+                    "medium": None,
+                    "body": None,
+                    "body_sha256": None,
+                    "verbatim": True,
+                },
             } if verdict in REQUIRES_REPLY else None),
         },
         "validity": _validity_block(started, verdict),

@@ -1721,6 +1721,116 @@ def _subject_misnamed(rec):
     return None
 
 
+def cmd_reply(record_id, src_path, medium=None):
+    """Record the subject's reply, verbatim, against one named record.
+
+    THE GAP THIS CLOSES. Four surfaces promised that a reply "publishes
+    alongside the record, unedited": run.py's own rule string, README,
+    render_register.py's prose, and the live register page. There was no field
+    to carry one (`"reply": None` was the only write anywhere, and nothing read
+    it), no command to supply one, and no renderer to show one. Added 23 Oct
+    2026.
+
+    EVERY REFUSAL HERE IS DELIBERATE, and each is the reason the next line
+    exists.
+
+    It refuses if the artifact was never delivered. A reply to a notice nobody
+    received is not a reply, and recording one would backdate the window.
+
+    It refuses an empty or unreadable file rather than storing an empty body.
+    This file's own convention is that what cannot be read is not a pass.
+
+    It stores the bytes VERBATIM. No strip, no normalisation, no markdown
+    rendering, no truncation. "Unedited" is the entire promise.
+
+    It takes received_at from the clock, never from the file. A timestamp inside
+    a document the subject supplies is a timestamp the subject controls.
+
+    It stores body_sha256 so "unedited" becomes checkable: the renderer refuses
+    to publish a body whose digest disagrees, and a reader can recompute it.
+    """
+    found = _record_paths()
+    if record_id not in found:
+        sys.stderr.write("REFUSED: no record with id %s under records/ or "
+                         "records/held/.\n" % record_id)
+        if found:
+            sys.stderr.write("  present: %s\n" % ", ".join(sorted(found)))
+        return 1
+
+    path, rec = found[record_id]
+    pub = rec.get("publication") or {}
+    ror = pub.get("right_of_reply") or {}
+    if not ror:
+        sys.stderr.write("REFUSED: %s carries no right_of_reply block, so its "
+                         "verdict is not one that opens a reply window.\n"
+                         % record_id)
+        return 1
+    if not ror.get("artifact_delivered_at"):
+        sys.stderr.write(
+            "REFUSED: %s has no artifact_delivered_at. A reply to a notice "
+            "nobody received is not a reply, and recording one would backdate "
+            "the window.\n" % record_id)
+        return 1
+
+    if not os.path.exists(src_path):
+        sys.stderr.write("REFUSED: %s does not exist.\n" % src_path)
+        return 1
+    try:
+        with io.open(src_path, encoding="utf-8") as fh:
+            body = fh.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        sys.stderr.write("REFUSED: %s could not be read as UTF-8 text: %s\n"
+                         % (src_path, exc))
+        return 1
+    if not body.strip():
+        sys.stderr.write(
+            "REFUSED: %s is empty. An empty reply is not a reply, and storing "
+            "one would publish a blank block under the subject's name.\n"
+            % src_path)
+        return 1
+
+    existing = (ror.get("reply") or {}).get("body")
+    if existing:
+        sys.stderr.write(
+            "REFUSED: %s already carries a reply. Replacing it would edit what "
+            "the subject said. Amend the record deliberately if that is really "
+            "what you mean.\n" % record_id)
+        return 1
+
+    # Local import, matching this file's idiom (see _reply_obligation_unmet).
+    from datetime import datetime as _dt, timezone as _tz
+    now = _dt.now(_tz.utc)
+    digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    ror["reply_received_at"] = now.isoformat()
+    ror["reply"] = {
+        "received_at": now.isoformat(),
+        "medium": medium,
+        "body": body,
+        "body_sha256": digest,
+        "verbatim": True,
+    }
+    pub["right_of_reply"] = ror
+    rec["publication"] = pub
+
+    with io.open(path, "w", encoding="utf-8") as fh:
+        json.dump(rec, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
+
+    sys.stdout.write(
+        "recorded a reply on %s\n"
+        "  bytes     %d\n"
+        "  sha256    %s\n"
+        "  received  %s\n"
+        "  medium    %s\n"
+        "\nThe manifest now disagrees with this record. Re-run --commit so what "
+        "is committed to covers the reply, which is what makes \"unedited\" a "
+        "claim a stranger can settle.\n"
+        % (record_id, len(body.encode("utf-8")), digest, now.isoformat(),
+           medium or "not stated"))
+    return 0
+
+
+
 def cmd_clear(record_id, dry_run=False):
     """Open the gate on exactly one record, named on the command line.
 
@@ -1968,6 +2078,25 @@ def main(argv):
             sys.stderr.write("REFUSED: --clear needs a record id, by name.\n")
             return 1
         return cmd_clear(argv[i + 1])
+    if "--reply" in argv:
+        i = argv.index("--reply")
+        if i + 1 >= len(argv):
+            sys.stderr.write("REFUSED: --reply needs a record id, by name.\n")
+            return 1
+        if "--from" not in argv:
+            sys.stderr.write("REFUSED: --reply needs --from <path> naming a "
+                             "file holding the subject's reply verbatim.\n")
+            return 1
+        j = argv.index("--from")
+        if j + 1 >= len(argv):
+            sys.stderr.write("REFUSED: --from needs a path.\n")
+            return 1
+        medium = None
+        if "--medium" in argv:
+            k = argv.index("--medium")
+            if k + 1 < len(argv):
+                medium = argv[k + 1]
+        return cmd_reply(argv[i + 1], argv[j + 1], medium=medium)
     if "--commit" in argv:
         return cmd_commit(amend="--amend" in argv)
     if "--verify-export" in argv:

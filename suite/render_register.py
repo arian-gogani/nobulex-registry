@@ -42,6 +42,7 @@ Usage:  python3 suite/render_register.py           (writes brand/register.html)
 """
 import io
 import json
+import hashlib
 import os
 import re
 import sys
@@ -611,8 +612,61 @@ def tuple_rows(rec):
                        % (esc(day(ror.get("artifact_delivered_at"))),
                           esc(day(ror.get("window_closes_at")))),
                        pending=not ror.get("reply_received_at")))
+        out.append(reply_block(ror))
     out.append("      </div>\n")
     return "".join(out)
+
+
+def reply_block(ror):
+    """The subject's own words, verbatim, or nothing.
+
+    Four surfaces promised a reply "publishes alongside the record, unedited"
+    and no code read the field: `"reply": None` in run.py was the only write of
+    it anywhere. This is that code, added 23 Oct 2026.
+
+    THREE RULES, each the reason a line here looks the way it does.
+
+    It may escape and it may wrap in <pre>. It may NOT reflow, excerpt,
+    summarise or truncate. "Unedited" is the whole of what is promised, and a
+    renderer that shortens a reply to fit a layout has edited it.
+
+    It REFUSES rather than publishes when the stored digest disagrees with the
+    stored body. That is what makes "unedited" checkable rather than merely
+    asserted: a reader recomputes sha256 over exactly what they are shown. A
+    mismatch means something altered the body after receipt, and publishing it
+    anyway would be publishing a reply the subject did not send.
+
+    It escapes through esc(). This is third-party text on a page the project
+    refuses to let any hand touch between the records and the reader. Unescaped,
+    README's "one author" property would become an XSS claim.
+    """
+    reply = ror.get("reply") or {}
+    body = reply.get("body")
+    if not body:
+        return ""
+    digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    stored = reply.get("body_sha256")
+    if stored and stored != digest:
+        return row(
+            "Reply",
+            "WITHHELD: the stored digest does not match the stored body, so "
+            "this reply cannot be shown as unedited. stored %s, computed %s"
+            % (esc(stored[:16]), esc(digest[:16])),
+            pending=True)
+    received = reply.get("received_at")
+    medium = reply.get("medium")
+    head = ("received %s" % esc(day(received))) if received else "received"
+    if medium:
+        head += " &nbsp;&middot;&nbsp; via %s" % esc(medium)
+    head += " &nbsp;&middot;&nbsp; sha256 %s" % esc(digest[:16])
+    return (
+        '      <div class="reply">\n'
+        '        <div class="reply-head">Reply from the subject'
+        ' &nbsp;&middot;&nbsp; %s</div>\n'
+        '        <pre class="reply-body">%s</pre>\n'
+        '        <div class="reply-note">Published verbatim. Not reflowed,'
+        ' excerpted or summarised. It does not alter the verdict.</div>\n'
+        '      </div>\n' % (head, esc(body)))
 
 
 def probe_table(rec):

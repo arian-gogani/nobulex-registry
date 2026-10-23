@@ -4175,6 +4175,66 @@ gate("taxonomy / harness.LOSS_CAUSES and the README table name the same causes",
      _loss_cause_table_drift, [], "detect")
 
 
+# ============================================================ right of reply
+# Four surfaces promised a reply "publishes alongside the record, unedited":
+# run.py's rule string, README, render_register.py's own prose, and the live
+# register page. `"reply": None` in run.py was the ONLY write of that field
+# anywhere and nothing read it. Implemented 23 Oct 2026; these pin it.
+def _reply_fixture(body="A reply.\n", digest=None, delivered=True):
+    import hashlib as _h
+    b = body
+    return {
+        "artifact_delivered_at": "2999-01-02T00:00:00+00:00" if delivered else None,
+        "window_closes_at": "2999-01-09T00:00:00+00:00",
+        "reply_received_at": "2999-01-03T00:00:00+00:00",
+        "reply": {
+            "received_at": "2999-01-03T00:00:00+00:00",
+            "medium": "email",
+            "body": b,
+            "body_sha256": digest if digest is not None
+            else _h.sha256(b.encode("utf-8")).hexdigest(),
+            "verbatim": True,
+        },
+    }
+
+
+def _reply_rendered(**kw):
+    import render_register as _rr
+    return _rr.reply_block(_reply_fixture(**kw))
+
+
+gate("reply / a stored reply is rendered at all, which nothing did before",
+     lambda: "reply-body" in _reply_rendered(), True, "detect")
+
+# The whole of what "unedited" promises. A renderer that shortens a reply to
+# fit a layout has edited it.
+gate("reply / the body appears verbatim, not reflowed or excerpted",
+     lambda: "line one\n\n  indented two\n" in _reply_rendered(
+         body="line one\n\n  indented two\n"),
+     True, "detect")
+
+# Third-party text on a page the project refuses to let a hand touch. Unescaped,
+# the one-author property becomes an XSS claim.
+gate("reply / markup in the body is escaped, not executed",
+     lambda: "&lt;script&gt;" in _reply_rendered(body="<script>x</script>")
+     and "<script>" not in _reply_rendered(body="<script>x</script>"),
+     True, "detect")
+
+# This is what makes "unedited" checkable rather than merely asserted.
+gate("reply / a body whose digest disagrees is WITHHELD, never published",
+     lambda: "WITHHELD" in _reply_rendered(body="tampered", digest="0" * 64)
+     and "tampered" not in _reply_rendered(body="tampered", digest="0" * 64),
+     True, "detect")
+
+gate("reply / the published digest is over the body actually shown",
+     lambda: __import__("hashlib").sha256(b"A reply.\n").hexdigest()[:16]
+     in _reply_rendered(), True, "detect")
+
+gate("reply / no reply means no block, not an empty one",
+     lambda: _reply_rendered(body="") == "", True, "quiet")
+
+
+
 
 # ============================================================ report
 def main():
