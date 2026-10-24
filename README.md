@@ -126,7 +126,7 @@ indeterminate rate was measured on one specific corpus, and without the pin a
 reader could not tell whether they still were.
 
 **The pilot is now a command rather than a promise.** This sentence described
-something nothing implemented until 21 October 2026: every artifact here ran
+something that nothing implemented until 21 October 2026: every artifact here ran
 against a fictional offline corpus, so you could not get a number about your own
 system without trusting ours.
 
