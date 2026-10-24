@@ -172,7 +172,9 @@ The grade does not prove a verdict is true. It establishes the verifier's relati
 
 A verifier that has not named its own attack surface is asking to be trusted.
 
-**The indeterminate sink.** Precommitting runs stops a verifier from suppressing an unfavourable pass or fail. It does nothing about an unbounded indeterminate, which would let any awkward result be filed as undecidable. So an indeterminate requires a reason drawn from a closed, published list, the indeterminate rate is published per suite and per subject, and a rate that moves when a subject becomes commercially significant is itself a visible fact. An escape hatch that is counted in public is not an escape hatch.
+**The indeterminate sink.** Precommitting runs stops a verifier from suppressing an unfavourable pass or fail. It does nothing about an unbounded indeterminate, which would let any awkward result be filed as undecidable. So an indeterminate requires a reason drawn from a closed, published list, the indeterminate rate is published, and a rate that moves when a subject becomes commercially significant is itself a visible fact. An escape hatch that is counted in public is not an escape hatch.
+
+**This sentence said "published per suite and per subject" until 23 October 2026, and that was a breakdown that does not exist.** What is published is ONE rate over ONE pinned corpus. There is no per-subject figure, and there could not be: the corpus is fictional and offline, as `fault_challenge.py` says in its own last line, so there is no subject to break a rate down by. The per-subject half of the commitment is the half that would catch a rate rising on a paying subject, which is the entire reason the sentence named it, and it is not built. It needs a run against a real subject before it can mean anything, and no such run exists.
 
 Implemented 20 October 2026, and it was not before. This paragraph committed in
 writing to publishing the indeterminate rate while nothing in the repository

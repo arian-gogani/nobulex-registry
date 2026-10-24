@@ -90,6 +90,18 @@ RETRACTED = [
     (DOCS, "re-runs the pinned suite against the pinned subject on a schedule",
      "No scheduler exists in this repository. Verified by searching for cron, "
      "schedule, celery, systemd and launchd across every Python file."),
+    # Scoped to the ASSERTION form. THESIS now QUOTES this phrase in the
+    # paragraph retracting it, as `said "published per suite and per subject"
+    # until 23 October 2026`, so the entry starts at "rate is", which the
+    # quotation does not contain. Choosing a phrase a quotation cannot match is
+    # how this gate keeps a zero false-positive rate; see the header of
+    # check_never_claim.py for what happens when a pattern tries to infer the
+    # difference instead.
+    (DOCS, "rate is published per suite and per subject",
+     "One rate over one pinned corpus is published. There is no per-subject "
+     "figure and there cannot be one: the corpus is fictional and offline, so "
+     "there is no subject to break a rate down by. The per-subject half was "
+     "the half that would catch a rate rising on a paying subject."),
     (PUBLISHED, "Queried outside this window the record returns EXPIRED",
      'README.md: "Automatic expiry at lookup is intended behavior, not '
      'implemented enforcement in this register."'),
