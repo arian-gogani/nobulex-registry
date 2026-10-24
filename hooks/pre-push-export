@@ -120,5 +120,32 @@ for g in suite/selftest_*.py gateway/selftest_live.py; do
   fi
 done
 
-echo "pre-push: nothing held is present, the register agrees with the manifest, and every selftest, gate and worked example in this repository exits 0."
+# The success line used to read "every selftest, gate and worked example in
+# this repository exits 0." That was FALSE, and it printed on every successful
+# push from 22 Oct 2026 until it was caught on 23 Oct.
+#
+# check_retracted_claims.py is a gate in this repository and it exits 1. The
+# exclusion above is deliberate and the reasoning for it is sound, but the hook
+# then announced a result about a gate it had chosen not to run. That is this
+# registry's dominant defect class in the guard that exists to catch it: a
+# measurement reporting a result about input it never examined. The exclusion
+# was recorded in a comment, where no reader of the output ever sees it.
+#
+# A skipped check has to appear in the output, not only in the source.
+SKIPPED=""
+for s in suite/check_retracted_claims.py; do
+  [ -f "$s" ] && SKIPPED="$SKIPPED $s"
+done
+
+echo "pre-push: nothing held is present, the register agrees with the manifest,"
+echo "and every selftest, gate and worked example LISTED IN THIS HOOK exits 0."
+if [ -n "$SKIPPED" ]; then
+  echo ""
+  echo "  NOT RUN, deliberately:$SKIPPED"
+  echo "  It exits 1 on a known defect that can only be cleared by"
+  echo "  regenerating brand/register.html in the tree holding the records."
+  echo "  So this push is NOT a statement that no retracted claim is present."
+  echo "  Run it by hand to see that separately-tracked count:"
+  echo "      python3 suite/check_retracted_claims.py"
+fi
 exit 0
