@@ -61,9 +61,14 @@ RETRACTED = [
     (PUBLISHED, "is now an inline decision-integrity gateway",
      'README.md: "The gateway is not inline anywhere. Nothing routes '
      'production traffic through it."'),
+    # The rationale below deliberately does NOT quote the phrase. It used to,
+    # and the self_control() added on 23 Oct 2026 caught it: a rationale that
+    # repeats its own phrase is a rationale no document can safely reuse, and
+    # it is the surest sign the phrase is short enough to fire on the very
+    # paragraph that withdraws the claim.
     (PUBLISHED, "before the action executes",
-     'Same retraction: nothing is deployed inline, so nothing happens '
-     '"before the action executes".'),
+     "Same retraction as the line above. Nothing is deployed inline, so there "
+     "is no point in time at which this gateway runs ahead of anything."),
     (PUBLISHED, "proves what happened on the other side",
      'README.md: "Nothing is published." And a signature proves who signed, '
      "not that the claim was true."),
@@ -123,7 +128,82 @@ CHECKED = [
 ]
 
 
+# Phrases shorter than four words that are deliberately allowed, each with the
+# reason it is safe. The bar for joining this set is not "it is inconvenient to
+# lengthen"; it is that ANY appearance of the phrase is a finding, including
+# inside a paragraph retracting it, so there is no quotation to protect.
+SHORT_PHRASE_OK = {
+    # Coined marketing compound. It describes a thing that has never existed:
+    # no procurement function has accepted an attestation and none has been
+    # issued. Unlike "unalterable", which is an ordinary English word this
+    # project has legitimate reason to discuss, there is no honest sentence in
+    # these documents that needs this compound. If it reappears anywhere, in a
+    # retraction or otherwise, it should be rewritten rather than quoted.
+    "procurement-ready attestation",
+}
+
+
+def self_control() -> list[str]:
+    """Assert the property that gives this gate its zero false-positive rate.
+
+    Three claims were retracted on 23 October 2026 and each correction QUOTES
+    the sentence it withdraws, because retracting a claim in place rather than
+    deleting it is this project's method. The gate stayed quiet on all three
+    quotations. That was not luck: each phrase was chosen long enough to span
+    the ASSERTION's grammar rather than only its keywords, so the quotation,
+    which is wrapped in different grammar, cannot contain it.
+
+    "a record can be unalterable" does not match `Not *unalterable*, which this
+    sentence said until 23 October 2026`. "rate is published per suite and per
+    subject" does not match `said "published per suite and per subject" until`.
+
+    That property is a habit, and a habit is not a gate. The failure mode is
+    somebody adding `unalterable` on its own in six months, after which this
+    script reports a finding against the paragraph that exists to retract it,
+    and then it gets switched off, and then the real findings stop being seen.
+    That is the exact reasoning used to refuse the 846-line pattern sweeper in
+    check_never_claim.py, and refusing that while leaving this undefended would
+    have been the same mistake one step along.
+
+    So the rule is enforced on the only text available at authoring time: the
+    retraction rationale stored beside each phrase. A rationale that quotes its
+    own phrase verbatim is a rationale that any document reusing it would trip
+    on, and it is the clearest signal that a phrase is short enough to catch
+    its own retraction.
+    """
+    problems = []
+    for scope, phrase, retraction in RETRACTED:
+        if phrase.lower() in retraction.lower():
+            problems.append(
+                f"the phrase {phrase!r} appears inside its own retraction "
+                "rationale. A phrase that matches the text explaining it is "
+                "short enough to fire on the paragraph that withdraws the "
+                "claim. Lengthen it to span the assertion's grammar.")
+        if len(phrase.split()) < 4 and phrase not in SHORT_PHRASE_OK:
+            problems.append(
+                f"the phrase {phrase!r} is {len(phrase.split())} word(s). A "
+                "phrase this short matches a quotation as readily as an "
+                "assertion. Four words is not a magic number; it is the point "
+                "below which no entry here has ever been safe. If any "
+                "appearance at all should be a finding, including inside a "
+                "retraction, add it to SHORT_PHRASE_OK with the reason.")
+        if not scope:
+            problems.append(
+                f"the phrase {phrase!r} is scoped to no surfaces, so it is "
+                "checked against nothing. A gate scoped to the empty set "
+                "reports clean about every file.")
+    return problems
+
+
 def main() -> int:
+    problems = self_control()
+    if problems:
+        print(f"{len(problems)} problem(s) with this gate's own entries, "
+              "which is a failure of the gate and not of the documents:\n")
+        for p in problems:
+            print("  " + p)
+        return 2
+
     findings = []
     checked = 0
 
