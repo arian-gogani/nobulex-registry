@@ -67,6 +67,10 @@ RETRACTED = [
     (PUBLISHED, "proves what happened on the other side",
      'README.md: "Nothing is published." And a signature proves who signed, '
      "not that the claim was true."),
+    (DOCS, "a record can be unalterable",
+     "A sha256 in a manifest makes an edit DETECTABLE, not impossible. The "
+     "record lives outside version control, so anyone holding the file can "
+     "edit it; the manifest then disagrees. Tamper-evident, not unalterable."),
     (DOCS, "Runs are committed before their results are known",
      "Nothing in this repository precommits a run. hold.py --commit hashes "
      "record files whose verdict fields are already populated, so it commits "
