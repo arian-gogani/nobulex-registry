@@ -196,6 +196,39 @@ def self_control() -> list[str]:
 
 
 def main() -> int:
+    # --self-control-only exists so the PUSH HOOK can run the half of this
+    # script that is safe to gate on.
+    #
+    # The whole script cannot be a push gate: it exits 1 on three retracted
+    # claims in brand/register.html that can only be cleared by regenerating
+    # the page in the tree that holds the records, and a gate blocking every
+    # push on something unfixable here teaches people to pass --no-verify,
+    # after which the ten gates that DO work stop working too. That reasoning
+    # is why it was excluded, and it still holds.
+    #
+    # But it conflated two different things under one exit code. "This gate is
+    # broken" and "this gate found something you cannot fix from here" are not
+    # the same event, and only the second one is unfixable. A malformed entry,
+    # a phrase scoped to no surface, a phrase short enough to fire on its own
+    # retraction: those are push blockers, because they silently reduce what
+    # the gate covers, and nothing else in the repository would notice.
+    #
+    # So the hook runs this mode, which asks only whether the gate itself is
+    # sound and says nothing about the documents.
+    if "--self-control-only" in sys.argv:
+        problems = self_control()
+        if problems:
+            print(f"{len(problems)} problem(s) with this gate's own entries:\n")
+            for p in problems:
+                print("  " + p)
+            return 2
+        print(f"{len(RETRACTED)} retracted-claim entries are well formed: each "
+              "is scoped to at least one surface, and each is phrased so that "
+              "a document QUOTING the claim in order to retract it does not "
+              "match. This says nothing about whether any claim is present; "
+              "run the script without this flag for that.")
+        return 0
+
     problems = self_control()
     if problems:
         print(f"{len(problems)} problem(s) with this gate's own entries, "

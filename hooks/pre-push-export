@@ -69,11 +69,42 @@ fi
 # day: there is no CI in this repository, so a gate nobody invokes is a gate
 # that passes on the day someone runs it and never on the day it matters.
 #
-# check_retracted_claims.py is DELIBERATELY ABSENT from this list. It exits 1 on
-# a known, separately-tracked defect that can only be cleared by regenerating
-# brand/register.html in the tree that holds the records. A gate that blocks
-# every push on a defect you cannot fix here teaches people to pass --no-verify,
-# after which none of the gates above work either.
+# check_retracted_claims.py is DELIBERATELY ABSENT from this list in its full
+# form. It exits 1 on a known, separately-tracked defect that can only be
+# cleared by regenerating brand/register.html in the tree that holds the
+# records. A gate that blocks every push on a defect you cannot fix here
+# teaches people to pass --no-verify, after which none of the gates above work
+# either.
+#
+# Its SELF-CONTROL is listed, though, because the exclusion was hiding two
+# different events under one exit code. "This gate is broken" and "this gate
+# found something you cannot fix from here" are not the same, and only the
+# second is unfixable. A phrase scoped to no surface, or one short enough to
+# fire on the paragraph retracting it, silently shrinks what the gate covers,
+# and nothing else here would notice. --self-control-only asks whether the gate
+# is sound and says nothing about the documents, so it is safe to gate on.
+#
+# Run SEPARATELY rather than added to GATES below. That list is iterated with
+# word splitting, so "script.py --flag" becomes two iterations: the flag fails
+# [ -f ] and is skipped, and the script then runs WITHOUT it and exits 1 on the
+# known finding, refusing every push forever. That was written, caught by
+# reading the loop, and replaced with this. A flag cannot live in a
+# whitespace-separated list of filenames.
+if ! $PY suite/check_retracted_claims.py --self-control-only >/dev/null 2>&1; then
+  $PY suite/check_retracted_claims.py --self-control-only
+  echo ""
+  echo "PUSH REFUSED."
+  echo "  The retracted-claim gate's own entries are malformed."
+  echo ""
+  echo "  This is not a finding about the documents. It means the gate"
+  echo "  covers less than it appears to: a phrase scoped to no surface"
+  echo "  checks nothing, and a phrase short enough to match the paragraph"
+  echo "  that retracts a claim produces a false positive, after which the"
+  echo "  gate gets switched off and the true findings stop being seen."
+  echo ""
+  exit 1
+fi
+
 GATES="
 suite/check_readme_pins.py
 gateway/selftest_gateway.py
