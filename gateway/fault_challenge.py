@@ -15,9 +15,11 @@ numbers come out measured rather than claimed:
 Honest scope, stated where it cannot be missed: the corpus is fictional and
 offline. It exercises the classifiers and the decision layer, not any live
 tool, feed or venue. Latency here is policy evaluation in process, not a
-network round trip and not an evidence fetch. A pilot replays this same
-corpus against a customer's real path, which is where the numbers become
-about their system rather than ours.
+network round trip and not an evidence fetch. A pilot replays the classifiers
+and the policy against a customer's real path, which is where the numbers
+become about their system rather than ours. It does NOT replay this corpus:
+`pilot.py` has no corpus input, and saying otherwise tells a reader the
+thirteen faults will be exercised against their system, which they will not.
 
 The corpus is versioned and pinned by hash, so "a fixed suite" is a claim a
 reader can check rather than take. The script asserts every expectation and
@@ -377,8 +379,9 @@ def main():
     print("every fault was caught, every clean case permitted, the "
           "indeterminate rate is inside its published ceiling, and this "
           "script exits nonzero the day any of those stops being true.")
-    print("Fictional corpus, offline. A pilot replays it against your path; "
-          "that run's numbers are about your system, not this one.")
+    print("Fictional corpus, offline. A pilot replays the classifiers and the "
+          "policy against your path, not this corpus; that run's numbers are "
+          "about your system, not this one.")
     return 0
 
 

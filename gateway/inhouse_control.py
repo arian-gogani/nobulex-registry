@@ -147,7 +147,7 @@ DEGRADED = [
      "action{} present, notional missing: an upstream rename",
      PASSING, {"action": {}}),
     ("limit field is a string",
-     "notional serialised as \"999999\", six times the cap",
+     "notional serialised as \"999999\", about twenty times the 50000 cap",
      PASSING, {"action": {"notional_usd": "999999"}}),
     ("limit field is null",
      "provider documents a number and sent null",
@@ -275,7 +275,8 @@ def main() -> int:
               f"short version is more permissive on this axis does not hold "
               f"on this run.")
     print()
-    print(f"  control (notional 6x over cap): real={oc_real} in-house={oc_mine}"
+    print(f"  control (notional 60000 vs 50000 cap, 1.2x): "
+          f"real={oc_real} in-house={oc_mine}"
           f"  {'OK' if control_holds else 'CONTROL FAILED'}")
     print("  The short version blocks correctly when the number is present and")
     print("  readable, so the five above are permissiveness, not breakage.")
