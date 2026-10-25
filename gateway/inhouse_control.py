@@ -191,15 +191,43 @@ def main() -> int:
     # ------------------------------------------------------------------
     # The degraded axis, which is the one that decides this question.
     # ------------------------------------------------------------------
-    diverged = []
+    # EVALUATED ONCE. Until 25 Oct 2026 this axis was evaluated TWICE, in two
+    # separate loops over DEGRADED: once here to build `diverged`, and again in
+    # the display block below to print the table. The printed evidence and the
+    # published number therefore came from different evaluations of the same
+    # question, with nothing comparing them.
+    #
+    # Found by sabotage, and the symptom is the proof. Forcing two cases to
+    # block in the counting loop produced a run whose table still showed all
+    # five rows as "in-house=PERMIT  DIVERGES" while the summary line beneath
+    # it read "3/5 diverge". Both printed, neither complained, exit 0. A reader
+    # could not tell which one was authoritative, and the one-pager quotes the
+    # summary while a reader checks the table.
+    #
+    # This is the registry's own dominant defect inside the control that
+    # produces its only affirmative selling claim: evidence that reports a
+    # result about an evaluation it did not display.
+    rows = []
     for name, why, outcomes, ctx in DEGRADED:
         real = decide(fc.POLICY, outcomes, ctx, mode=MODE_OBSERVE)
         try:
             mine = inhouse_decide(outcomes, ctx, INHOUSE_LIMITS)
         except Exception as exc:  # noqa: BLE001
             mine = f"CRASH {type(exc).__name__}"
-        if (real["decision"] == PERMIT) != (mine == "PERMIT"):
-            diverged.append((name, why, real, mine))
+        real_permits = real["decision"] == PERMIT
+        mine_permits = mine == "PERMIT"
+        rows.append({
+            "name": name, "why": why, "real": real, "mine": mine,
+            "diverges": real_permits != mine_permits,
+            # WHICH WAY it diverges, which was previously asserted by an
+            # unconditional f-string rather than computed. "in-house permits"
+            # is the permissive direction and the only one the published
+            # sentence is entitled to claim.
+            "inhouse_permissive": (not real_permits) and mine_permits,
+        })
+
+    diverged = [r for r in rows if r["diverges"]]
+    wrong_direction = [r for r in diverged if not r["inhouse_permissive"]]
 
     # The control for the controls.
     oc_out, oc_ctx = OVER_CAP
@@ -221,17 +249,31 @@ def main() -> int:
         print("     both versions share. The decision layer adds nothing here.")
     print()
     print("AXIS 2: absent or unreadable evidence")
-    for name, why, outcomes, ctx in DEGRADED:
-        real = decide(fc.POLICY, outcomes, ctx, mode=MODE_OBSERVE)
-        try:
-            mine = inhouse_decide(outcomes, ctx, INHOUSE_LIMITS)
-        except Exception as exc:  # noqa: BLE001
-            mine = f"CRASH {type(exc).__name__}"
-        mark = "DIVERGES" if (real["decision"] == PERMIT) != (mine == "PERMIT") else ""
-        print(f"  {name:24} real={real['decision']:9} in-house={mine:8} {mark}")
-        print(f"  {'':24} {why}")
-    print(f"  -> {len(diverged)}/{len(DEGRADED)} diverge, every one in the same "
-          f"direction: in-house permits.")
+    # Printed from `rows`, the same list the count comes from. Nothing is
+    # recomputed here, so the table and the summary cannot disagree.
+    for r in rows:
+        mark = "DIVERGES" if r["diverges"] else ""
+        if r["diverges"] and not r["inhouse_permissive"]:
+            mark = "DIVERGES (in-house BLOCKS, opposite direction)"
+        print(f"  {r['name']:24} real={r['real']['decision']:9} "
+              f"in-house={r['mine']:8} {mark}")
+        print(f"  {'':24} {r['why']}")
+    # The direction is now computed rather than asserted. The old line said
+    # "every one in the same direction: in-house permits" as a literal, so it
+    # printed that sentence even when a divergence ran the other way.
+    if diverged and not wrong_direction:
+        print(f"  -> {len(diverged)}/{len(DEGRADED)} diverge, every one in the "
+              f"same direction: in-house permits.")
+    elif diverged:
+        print(f"  -> {len(diverged)}/{len(DEGRADED)} diverge, and "
+              f"{len(wrong_direction)} of them in the OPPOSITE direction, "
+              f"where the in-house stub blocks what the gateway permits. The "
+              f"published sentence claims a uniform direction and is not true "
+              f"of this run.")
+    else:
+        print(f"  -> 0/{len(DEGRADED)} diverge. The published claim that the "
+              f"short version is more permissive on this axis does not hold "
+              f"on this run.")
     print()
     print(f"  control (notional 6x over cap): real={oc_real} in-house={oc_mine}"
           f"  {'OK' if control_holds else 'CONTROL FAILED'}")
@@ -244,6 +286,43 @@ def main() -> int:
         failures.append("the over-cap control did not block in both versions, "
                         "so no divergence above can be attributed to "
                         "permissiveness rather than to a broken in-house stub")
+
+    # THE PUBLISHED NUMBERS ON THIS AXIS ARE NOW GATED, and until 25 Oct 2026
+    # they were not. `failures.append` appeared at exactly two sites in this
+    # file, the over-cap control above and the LOC ceiling below, so neither
+    # the divergence count nor its direction was checked by anything.
+    #
+    # Proven by sabotage: forcing two of the five cases to block dropped the
+    # printed summary to "3/5" and the script still exited 0. The one-pager
+    # sells "5 of 5, every divergence in the same direction", so a gateway
+    # regression on the abstention axis would have silently falsified the one
+    # affirmative claim on that page while every gate reported clean.
+    #
+    # A number published in prose that no code checks is the same defect this
+    # repository already paid for once, when "271 lines of code" drifted to 274
+    # in two days. The response then was to measure it; the response here is to
+    # pin it.
+    PUBLISHED_DIVERGENCES = 5
+    if len(diverged) != PUBLISHED_DIVERGENCES:
+        failures.append(
+            f"{len(diverged)} of {len(DEGRADED)} degraded conditions diverge, "
+            f"and {PUBLISHED_DIVERGENCES} is published. ONEPAGER-gateway and "
+            f"the thesis both state this count, so it cannot move without the "
+            f"sentence moving with it. If the gateway legitimately changed, "
+            f"update PUBLISHED_DIVERGENCES and the prose in the same commit "
+            f"and say what changed; if it did not, something regressed on the "
+            f"abstention axis")
+    if wrong_direction:
+        failures.append(
+            f"{len(wrong_direction)} divergence(s) run in the opposite "
+            f"direction, where the in-house stub blocks what the gateway "
+            f"permits: "
+            + ", ".join(r["name"] for r in wrong_direction)
+            + ". The published sentence claims every divergence is in one "
+              "direction, in-house permits, and that is the whole argument "
+              "for the decision layer. A divergence the other way means the "
+              "stub is stricter than the thing it is a control for, and the "
+              "claim is not merely imprecise but backwards")
 
     # ------------------------------------------------------------------
     # The verdict, stated against the thesis condition, including the half
