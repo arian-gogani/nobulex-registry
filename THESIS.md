@@ -68,7 +68,7 @@ in the short version resolves toward PERMIT. `all([])` is True, a missing
 dotted field reads as 0 and 0 is under every cap, and an incomparable value
 falls through its `except TypeError`. Each is individually defensible and a
 reviewer would approve all three. A control case with the number present and
-six times over the cap blocks in both versions, so those five are
+1.2 times the cap, 60000 against 50000, blocks in both versions, so those five are
 permissiveness rather than a broken stub.
 
 **So the gateway's whole claim is abstention, and that is the only claim this
