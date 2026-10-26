@@ -566,7 +566,7 @@ curl -sS https://nobulex.com/register | shasum -a 256
 
 **This check does not hold, and the reason is structural rather than a lapse.** The
 committed file prints
-`7be22912644d646083f23d1c4e36e37cbe9d856d771f2b7e8dbe6095e40e93a7`.
+`8659a0b7925debde324cd5ef07871f3e7a7fe27b4d27aab05d8406e99262a637`.
 The deployed page prints a different value, and **that value changes every time
 the site is deployed**, so pinning it here was always going to go stale. It did:
 a figure pinned on 21 October was wrong by 22 October because the site shipped a
@@ -590,7 +590,7 @@ verdict, though one of them is a retracted claim:
 | two Vercel analytics `<script>` blocks | injected at deploy, not emitted by the generator |
 | an HTML comment | present only in the committed copy |
 | the `<p class="note">` paragraph and the direction banner | rewritten on the deployed page |
-| the `<div class="oneline">` headline | rewritten on the deployed page. **The committed text is one of the three retracted claims `suite/check_retracted_claims.py` flags**, so this row is also the known regeneration defect |
+| the `<div class="oneline">` headline | regenerated on 26 October. The committed headline no longer contains a retracted claim. `suite/check_retracted_claims.py` exits 0 on this file |
 
 **If the diff contains anything outside those six, say so loudly.** This
 enumeration said five until later the same day, and the missing sixth was the
